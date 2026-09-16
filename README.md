@@ -41,6 +41,42 @@ You're in the right place.
 - Payment is handled by [Opire](https://opire.dev) (Stripe)
 - Quality over speed — a solid PR beats a fast one
 
+## Destructive-command guard hook
+
+This repository includes `hooks/destructive_command_guard.py`, a dependency-free
+Claude Code `PreToolUse` hook for the bounty in [issue #3](../../issues/3). It
+denies `rm -rf`, `git push --force`, `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
+without a `WHERE` clause. Every denial is appended as one JSON line to
+`~/.claude/hooks/blocked.log`, including the UTC timestamp, attempted command,
+and project path. Ordinary commands (including scoped SQL deletes) remain
+untouched. The denial response contains a clear explanation for Claude.
+
+From the repository root, install it and merge its `PreToolUse` matcher into
+your existing Claude settings with one command:
+
+```bash
+python3 hooks/install.py
+```
+
+The installer copies the hook to `~/.claude/hooks/` and preserves unrelated
+settings. To configure it manually instead, add this matcher to
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "python3 ~/.claude/hooks/destructive_command_guard.py"}
+        ]
+      }
+    ]
+  }
+}
+```
+
 ---
 
 ## Community
