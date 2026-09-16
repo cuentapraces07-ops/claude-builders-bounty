@@ -125,7 +125,14 @@ def _sql_reason(segment: list[str]) -> str | None:
 
     if not segment:
         return None
-    executable = Path(segment[_executable_index(segment)]).name.lower()
+    executable_index = _executable_index(segment)
+    # A segment containing only environment assignments (for example
+    # ``DEBUG=1``) is valid shell input but has no executable.  Treat it as a
+    # harmless no-op instead of allowing the detector itself to raise an
+    # IndexError and make the hook noisy.
+    if executable_index >= len(segment):
+        return None
+    executable = Path(segment[executable_index]).name.lower()
     text = " ".join(segment)
     # A literal shown with echo/printf, or a program merely containing SQL in
     # a source string, is not being executed. Cover direct SQL statements and

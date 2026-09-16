@@ -35,6 +35,7 @@ class GuardDetectionTests(unittest.TestCase):
         for command in (
             "git status",
             "rm -r ./build",
+            "DEBUG=1",
             "echo 'DROP TABLE accounts'",
             "python -c \"print('DROP TABLE accounts')\"",
             "npm test",
