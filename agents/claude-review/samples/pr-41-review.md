@@ -17,4 +17,3 @@ The pull request changes 4 file(s), adding 341 line(s) and removing 0. Its title
 - Run the repository's lint, type-check, and test commands in CI before merging.
 
 ## Confidence: Medium
-
