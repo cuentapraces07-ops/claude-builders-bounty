@@ -28,6 +28,7 @@ _SQL_CLIENTS = {
     "sqlite3",
     "sqlcmd",
 }
+_SHELL_WRAPPERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
 _SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
@@ -151,6 +152,26 @@ def _sql_reason(segment: list[str]) -> str | None:
     return None
 
 
+def _wrapped_script(segment: list[str]) -> str | None:
+    """Return the inline script from a common ``sh -c`` style wrapper.
+
+    Claude often emits a shell wrapper when it needs a particular shell or
+    flags.  The outer command itself is harmless, but the inline script is
+    still executed by that shell and must go through the same detector.
+    """
+
+    index = _executable_index(segment)
+    if index >= len(segment) or Path(segment[index]).name.lower() not in _SHELL_WRAPPERS:
+        return None
+    args = segment[index + 1 :]
+    for position, token in enumerate(args):
+        # ``sh -c SCRIPT`` and ``sh -lc SCRIPT`` are the useful forms here.
+        # Stop at the first argument that consumes the next token as a script.
+        if token in {"-c", "-lc", "-cl"} and position + 1 < len(args):
+            return args[position + 1]
+    return None
+
+
 def detect_danger(command: str) -> str | None:
     """Return a human-readable block reason, or ``None`` for safe commands."""
 
@@ -161,6 +182,14 @@ def detect_danger(command: str) -> str | None:
         reason = _rm_reason(segment) or _git_force_reason(segment) or _sql_reason(segment)
         if reason:
             return reason
+        # Recursively inspect inline shell scripts such as
+        # ``bash -lc 'git push --force origin main'``.  The depth is naturally
+        # bounded by the command's token count, and an empty script is safe.
+        wrapped = _wrapped_script(segment)
+        if wrapped:
+            reason = detect_danger(wrapped)
+            if reason:
+                return reason
     return None
 
 

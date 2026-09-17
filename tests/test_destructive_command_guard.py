@@ -22,6 +22,11 @@ class GuardDetectionTests(unittest.TestCase):
         self.assertIsNotNone(detect_danger("git -C repo push origin main --force"))
         self.assertIsNotNone(detect_danger("git push --force-with-lease origin main"))
 
+    def test_blocks_dangerous_commands_inside_shell_wrappers(self) -> None:
+        self.assertIsNotNone(detect_danger("bash -lc 'rm -rf ./build'"))
+        self.assertIsNotNone(detect_danger("sh -c 'git push --force origin main'"))
+        self.assertIsNotNone(detect_danger("zsh -c 'DELETE FROM accounts'"))
+
     def test_blocks_destructive_sql(self) -> None:
         self.assertIsNotNone(detect_danger("DROP TABLE accounts"))
         self.assertIsNotNone(detect_danger("TRUNCATE TABLE accounts"))
@@ -38,6 +43,8 @@ class GuardDetectionTests(unittest.TestCase):
             "DEBUG=1",
             "echo 'DROP TABLE accounts'",
             "python -c \"print('DROP TABLE accounts')\"",
+            "bash -lc \"echo 'rm -rf ./build'\"",
+            "sh -c 'echo DELETE FROM accounts'",
             "npm test",
         ):
             with self.subTest(command=command):
