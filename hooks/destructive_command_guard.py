@@ -116,7 +116,12 @@ def _git_force_reason(segment: list[str]) -> str | None:
         push_index = tokens.index("push")
     except ValueError:
         return None
-    if any(token in {"--force", "--force-with-lease", "-f"} for token in tokens[push_index + 1 :]):
+    if any(
+        token in {"--force", "--force-with-lease", "-f"}
+        or token.startswith("--force-with-lease=")
+        or token.startswith("--force=")
+        for token in tokens[push_index + 1 :]
+    ):
         return "a forced git push can rewrite shared history."
     return None
 
@@ -146,9 +151,10 @@ def _sql_reason(segment: list[str]) -> str | None:
         return "DROP TABLE is destructive and is blocked by this hook."
     if _SQL_TRUNCATE_RE.search(text):
         return "TRUNCATE is destructive and is blocked by this hook."
-    delete_match = _SQL_DELETE_RE.search(text)
-    if delete_match and not _WHERE_RE.search(text[delete_match.end() :]):
-        return "DELETE FROM without a WHERE clause can remove every row."
+    for delete_match in _SQL_DELETE_RE.finditer(text):
+        statement_tail = text[delete_match.end() :].split(";", 1)[0]
+        if not _WHERE_RE.search(statement_tail):
+            return "DELETE FROM without a WHERE clause can remove every row."
     return None
 
 

@@ -21,6 +21,7 @@ class GuardDetectionTests(unittest.TestCase):
     def test_blocks_force_push(self) -> None:
         self.assertIsNotNone(detect_danger("git -C repo push origin main --force"))
         self.assertIsNotNone(detect_danger("git push --force-with-lease origin main"))
+        self.assertIsNotNone(detect_danger("git push --force-with-lease=main origin main"))
 
     def test_blocks_dangerous_commands_inside_shell_wrappers(self) -> None:
         self.assertIsNotNone(detect_danger("bash -lc 'rm -rf ./build'"))
@@ -35,6 +36,10 @@ class GuardDetectionTests(unittest.TestCase):
 
     def test_allows_scoped_delete(self) -> None:
         self.assertIsNone(detect_danger("DELETE FROM accounts WHERE id = 7"))
+
+    def test_blocks_unscoped_delete_before_a_later_where_clause(self) -> None:
+        command = "psql -c 'DELETE FROM accounts; SELECT * FROM audit WHERE id = 7'"
+        self.assertIsNotNone(detect_danger(command))
 
     def test_allows_normal_commands_and_literal_output(self) -> None:
         for command in (
