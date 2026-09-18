@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Generate a small, structured Markdown changelog from git history.
+
+The command is intentionally dependency-free so it can be used from a fresh
+clone or from a Claude Code session without installing a toolchain.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+SECTIONS = ("Added", "Fixed", "Changed", "Removed")
+_CONVENTIONAL = re.compile(r"^(?P<kind>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<body>.+)$", re.I)
+
+
+@dataclass(frozen=True)
+class Commit:
+    sha: str
+    author: str
+    subject: str
+
+
+class GitError(RuntimeError):
+    """Raised when the target directory is not a usable git repository."""
+
+
+def _git(repo: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        raise GitError(detail.strip()) from exc
+    return result.stdout
+
+
+def repository_root(repo: Path) -> Path:
+    return Path(_git(repo, "rev-parse", "--show-toplevel").strip()).resolve()
+
+
+def latest_tag(repo: Path) -> str | None:
+    output = _git(repo, "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)", "refs/tags")
+    return next((line.strip() for line in output.splitlines() if line.strip()), None)
+
+
+def commits_since(repo: Path, base: str | None) -> list[Commit]:
+    revision = f"{base}..HEAD" if base else "HEAD"
+    # Unit-separator/record-separator delimiters keep subjects containing
+    # punctuation and spaces unambiguous without shell parsing.
+    raw = _git(
+        repo,
+        "log",
+        "--no-merges",
+        "--reverse",
+        "--date-order",
+        "--pretty=format:%H%x1f%an%x1f%s%x1e",
+        revision,
+    )
+    result: list[Commit] = []
+    for record in raw.split("\x1e"):
+        fields = record.strip("\n\r").split("\x1f")
+        if len(fields) != 3 or not fields[0].strip():
+            continue
+        result.append(Commit(*(field.strip() for field in fields)))
+    return result
+
+
+def github_slug(repo: Path) -> str:
+    """Return ``owner/repository`` for commit links when origin is GitHub."""
+    try:
+        remote = _git(repo, "remote", "get-url", "origin").strip()
+    except GitError:
+        return repo.name
+    match = re.search(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$", remote, re.I)
+    return f"{match.group(1)}/{match.group(2)}" if match else repo.name
+
+
+def classify(subject: str) -> tuple[str, str]:
+    """Return a stable section and a readable subject for one commit."""
+    match = _CONVENTIONAL.match(subject.strip())
+    kind = match.group("kind").lower() if match else ""
+    readable = match.group("body").strip() if match else subject.strip()
+    text = f"{kind} {readable}".lower()
+
+    if kind in {"feat", "add", "added", "create", "new"} or re.search(r"\b(add|added|create|new|introduc)", text):
+        return "Added", readable
+    if kind in {"fix", "fixed", "bug", "patch", "repair"} or re.search(r"\b(fix|fixed|bug|patch|repair|correct)", text):
+        return "Fixed", readable
+    if kind in {"remove", "removed", "delete", "deprecate"} or re.search(r"\b(remove|removed|delete|deprecat)", text):
+        return "Removed", readable
+    return "Changed", readable
+
+
+def markdown(repo: Path, commits: list[Commit], base: str | None, generated: str | None = None) -> str:
+    date = generated or os.environ.get("CHANGELOG_DATE") or datetime.now(timezone.utc).date().isoformat()
+    title = f" since `{base}`" if base else ""
+    lines = ["# Changelog", "", f"Generated on {date}{title}.", "", "## Unreleased", ""]
+    grouped: dict[str, list[tuple[Commit, str]]] = {section: [] for section in SECTIONS}
+    for commit in commits:
+        section, readable = classify(commit.subject)
+        grouped[section].append((commit, readable))
+
+    if not commits:
+        lines.append("- No changes since the selected baseline.")
+    else:
+        for section in SECTIONS:
+            lines.append(f"### {section}")
+            lines.append("")
+            entries = grouped[section]
+            if not entries:
+                lines.append("- None.")
+            else:
+                for commit, readable in entries:
+                    safe = readable.replace("\r", " ").replace("\n", " ").strip()
+                    lines.append(f"- {safe} ([`{commit.sha[:7]}`](https://github.com/{github_slug(repo)}/commit/{commit.sha})) — {commit.author}")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=Path.cwd(), help="Git repository to inspect (default: current directory)")
+    parser.add_argument("--output", type=Path, default=Path("CHANGELOG.md"), help="Output Markdown path")
+    parser.add_argument("--base", help="Override the baseline revision; otherwise use the latest git tag")
+    parser.add_argument("--date", help="Deterministic date (YYYY-MM-DD), useful for tests")
+    parser.add_argument("--stdout", action="store_true", help="Print the generated Markdown instead of writing a file")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    try:
+        repo = repository_root(args.repo)
+        base = args.base if args.base is not None else latest_tag(repo)
+        content = markdown(repo, commits_since(repo, base), base, args.date)
+        if args.stdout:
+            sys.stdout.write(content)
+        else:
+            output = args.output if args.output.is_absolute() else repo / args.output
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(content, encoding="utf-8", newline="\n")
+            print(f"Wrote {output} (baseline: {base or 'repository root'})")
+        return 0
+    except GitError as exc:
+        print(f"changelog: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -48,6 +48,21 @@ You're in the right place.
 - 🐦 X: [@ClaudeBounty](https://x.com/ClaudeBounty)
 - 📧 Contact: claudebounty@gmail.com
 
+## Changelog skill
+
+This repository includes a dependency-free generator that reads commits since
+the latest git tag, categorizes them as Added, Fixed, Changed, or Removed,
+and writes a structured `CHANGELOG.md`. It is safe to run repeatedly.
+
+Setup and use it in three steps:
+
+1. Clone this repository and enter the project directory.
+2. Run `bash changelog.sh` (or `python3 scripts/changelog.py`).
+3. Review the generated `CHANGELOG.md` and commit it with your release.
+
+Use `--base <revision>` to choose an explicit baseline, `--output <path>` to
+write elsewhere, or `--stdout` to preview without changing a file.
+
 ---
 
 *Started by the Claude builder community · March 2026 · MIT License*
