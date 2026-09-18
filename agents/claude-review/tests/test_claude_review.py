@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from claude_review import PullRequest, diff_stats, heuristic_review, parse_pull_url, render
+from claude_review import PullRequest, changed_files, diff_stats, heuristic_review, parse_pull_url, render
 
 
 class ReviewTests(unittest.TestCase):
@@ -22,6 +22,16 @@ class ReviewTests(unittest.TestCase):
         result = heuristic_review(pr)
         self.assertTrue(any("eval" in risk.lower() for risk in result.risks))
         self.assertIn("## Confidence:", render(pr, result))
+
+    def test_diff_stats_counts_deleted_files(self):
+        diff = """diff --git a/removed.py b/removed.py
+--- a/removed.py
++++ /dev/null
+@@ -1 +0,0 @@
+-old()
+"""
+        self.assertEqual(changed_files(diff), ("removed.py",))
+        self.assertEqual(diff_stats(diff), (1, 0, 1))
 
     def test_safe_review_still_has_actionable_suggestion(self):
         pr = PullRequest("https://github.com/a/r/pull/2", "a", "r", 2, "Docs", "", "")

@@ -89,9 +89,16 @@ def fetch_pull(url: str) -> PullRequest:
 
 def changed_files(diff: str) -> tuple[str, ...]:
     files: list[str] = []
+    old_path: str | None = None
     for line in diff.splitlines():
-        if line.startswith("+++ b/"):
+        if line.startswith("--- a/"):
+            old_path = line[6:]
+        elif line.startswith("+++ b/"):
             files.append(line[6:])
+            old_path = None
+        elif line == "+++ /dev/null" and old_path is not None:
+            files.append(old_path)
+            old_path = None
     return tuple(dict.fromkeys(files))
 
 
