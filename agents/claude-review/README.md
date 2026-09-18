@@ -11,9 +11,12 @@ a claim that Claude reviewed the PR.
 ## Setup and use
 
 1. Copy this directory into a project with Python 3.10+.
-2. Optionally set `ANTHROPIC_API_KEY` and run:
-   `python agents/claude-review/claude_review.py --pr https://github.com/owner/repo/pull/123`.
-3. Add `--output review.md` to save the report, then inspect it before merging.
+2. From the repository root, run the included executable:
+   `./bin/claude-review --pr https://github.com/owner/repo/pull/123`.
+   On Windows, invoke the same entry point with
+   `python bin/claude-review --pr https://github.com/owner/repo/pull/123`.
+3. Optionally set `ANTHROPIC_API_KEY`; add `--output review.md` to save the
+   report, then inspect it before merging.
 
 The client accepts only HTTPS `github.com` pull-request URLs, caps fetched
 diffs at 1 MB, never executes the target repository, and does not print API
