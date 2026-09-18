@@ -152,6 +152,50 @@ def heuristic_review(pr: PullRequest) -> Review:
     return Review(summary, tuple(risks), tuple(dict.fromkeys(suggestions)), confidence, "local heuristic (no Claude API key)")
 
 
+def _parse_claude_response(data: object) -> Review:
+    """Validate and normalize the JSON envelope returned by Claude."""
+
+    if not isinstance(data, dict):
+        raise RuntimeError("Claude response was not a JSON object")
+    content = data.get("content")
+    if not isinstance(content, list) or not content or not isinstance(content[0], dict):
+        raise RuntimeError("Claude response did not contain a text content block")
+    text = content[0].get("text")
+    if not isinstance(text, str):
+        raise RuntimeError("Claude response content block had no text")
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        raise RuntimeError("Claude response did not contain a JSON review")
+    try:
+        result = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Claude review JSON was invalid: {exc}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("Claude review JSON was not an object")
+
+    summary = result.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise RuntimeError("Claude review did not contain a summary")
+
+    normalized: dict[str, tuple[str, ...]] = {}
+    for field in ("risks", "suggestions"):
+        value = result.get(field, [])
+        if not isinstance(value, list):
+            raise RuntimeError(f"Claude review field {field!r} was not an array")
+        normalized[field] = tuple(str(item) for item in value)
+
+    confidence = str(result.get("confidence", "Low"))
+    if confidence not in {"Low", "Medium", "High"}:
+        confidence = "Low"
+    return Review(
+        summary,
+        normalized["risks"],
+        normalized["suggestions"],
+        confidence,
+        "Claude API (claude-sonnet-4-20250514)",
+    )
+
+
 def _claude_review(pr: PullRequest, api_key: str) -> Review:
     prompt = f"""Review this GitHub pull request. Return JSON only with keys summary (2-3 sentences), risks (array of strings), suggestions (array of strings), and confidence (Low, Medium, or High). Be specific and do not claim tests were run unless the diff proves it.\n\nURL: {pr.url}\nTitle: {pr.title}\nBody:\n{pr.body[:8000]}\n\nDiff:\n{pr.diff[:50000]}"""
     payload = json.dumps(
@@ -179,22 +223,7 @@ def _claude_review(pr: PullRequest, api_key: str) -> Review:
             data = json.loads(response.read(MAX_DIFF_BYTES).decode("utf-8"))
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Claude API request failed: {exc}") from exc
-    content = data.get("content") if isinstance(data, dict) else None
-    text = content[0].get("text", "") if isinstance(content, list) and content else ""
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise RuntimeError("Claude response did not contain a JSON review")
-    result = json.loads(match.group(0))
-    confidence = str(result.get("confidence", "Low"))
-    if confidence not in {"Low", "Medium", "High"}:
-        confidence = "Low"
-    return Review(
-        str(result.get("summary", "No summary returned.")),
-        tuple(str(value) for value in result.get("risks", [])),
-        tuple(str(value) for value in result.get("suggestions", [])),
-        confidence,
-        "Claude API (claude-sonnet-4-20250514)",
-    )
+    return _parse_claude_response(data)
 
 
 def review(pr: PullRequest, api_key: str | None) -> Review:

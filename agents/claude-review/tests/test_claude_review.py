@@ -4,7 +4,15 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from claude_review import PullRequest, changed_files, diff_stats, heuristic_review, parse_pull_url, render
+from claude_review import (
+    PullRequest,
+    _parse_claude_response,
+    changed_files,
+    diff_stats,
+    heuristic_review,
+    parse_pull_url,
+    render,
+)
 
 
 class ReviewTests(unittest.TestCase):
@@ -39,6 +47,23 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(result.suggestions)
         self.assertEqual(result.confidence, "Low")
         self.assertGreaterEqual(result.summary.count("."), 2)
+
+    def test_claude_response_validation(self):
+        valid = {
+            "content": [
+                {
+                    "text": '{"summary":"One. Two.","risks":[],"suggestions":["Test"],"confidence":"High"}'
+                }
+            ]
+        }
+        result = _parse_claude_response(valid)
+        self.assertEqual(result.confidence, "High")
+        self.assertEqual(result.suggestions, ("Test",))
+
+        with self.assertRaises(RuntimeError):
+            _parse_claude_response({"content": []})
+        with self.assertRaises(RuntimeError):
+            _parse_claude_response({"content": [{"text": '{"summary":"ok","risks":"not-list"}'}]})
 
 
 if __name__ == "__main__":
