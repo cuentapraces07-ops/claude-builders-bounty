@@ -6,7 +6,7 @@
 
 ## Summary
 
-The pull request changes 5 file(s), adding 537 line(s) and removing 0. Its title is 'feat(template): CLAUDE.md for Next.js + SQLite SaaS project (Closes #2)'; this baseline reviews the fetched diff without executing repository code.
+The pull request changes 5 file(s), adding 537 line(s) and removing 0. Its title is 'feat(template): CLAUDE.md for Next.js + SQLite SaaS project (Closes #2)'. The deterministic baseline reviews the fetched diff without executing repository code.
 
 ## Identified risks
 

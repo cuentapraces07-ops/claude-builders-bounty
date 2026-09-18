@@ -6,7 +6,7 @@
 
 ## Summary
 
-The pull request changes 4 file(s), adding 341 line(s) and removing 0. Its title is 'feat(skill): generate CHANGELOG from git history (Closes #1)'; this baseline reviews the fetched diff without executing repository code.
+The pull request changes 4 file(s), adding 341 line(s) and removing 0. Its title is 'feat(skill): generate CHANGELOG from git history (Closes #1)'. The deterministic baseline reviews the fetched diff without executing repository code.
 
 ## Identified risks
 
