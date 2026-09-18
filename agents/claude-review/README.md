@@ -4,8 +4,9 @@ This directory contains a dependency-free CLI that fetches a public GitHub PR,
 reviews its diff, and emits a structured Markdown report. With
 `ANTHROPIC_API_KEY` set it calls `claude-sonnet-4-20250514`; with no key it
 falls back to a deterministic local baseline and labels that mode in the
-report. The fallback is for safe previews and tests, not a claim that Claude
-reviewed the PR.
+report. `--offline` disables Anthropic API calls but still fetches the public
+GitHub metadata and diff; it is not a network-free mode. The fallback is not
+a claim that Claude reviewed the PR.
 
 ## Setup and use
 

@@ -28,6 +28,7 @@ class ReviewTests(unittest.TestCase):
         result = heuristic_review(pr)
         self.assertTrue(result.suggestions)
         self.assertEqual(result.confidence, "Low")
+        self.assertGreaterEqual(result.summary.count("."), 2)
 
 
 if __name__ == "__main__":

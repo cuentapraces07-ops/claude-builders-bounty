@@ -139,7 +139,7 @@ def heuristic_review(pr: PullRequest) -> Review:
 
     summary = (
         f"The pull request changes {files} file(s), adding {additions} line(s) and removing {deletions}. "
-        f"Its title is {pr.title!r}; this baseline reviews the fetched diff without executing repository code."
+        f"Its title is {pr.title!r}. The deterministic baseline reviews the fetched diff without executing repository code."
     )
     confidence = "Medium" if files and additions + deletions <= 500 else "Low"
     return Review(summary, tuple(risks), tuple(dict.fromkeys(suggestions)), confidence, "local heuristic (no Claude API key)")
@@ -226,7 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Review a GitHub pull request and print structured Markdown.")
     parser.add_argument("--pr", required=True, help="HTTPS GitHub pull request URL")
     parser.add_argument("--output", "-o", help="Write Markdown to this file instead of stdout")
-    parser.add_argument("--offline", action="store_true", help="Use the deterministic local review without Claude")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Disable Claude API calls and use the local review (GitHub metadata/diff are still fetched)",
+    )
     return parser
 
 
