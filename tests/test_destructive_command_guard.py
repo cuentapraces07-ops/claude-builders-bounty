@@ -25,6 +25,8 @@ class GuardDetectionTests(unittest.TestCase):
 
     def test_blocks_dangerous_commands_inside_shell_wrappers(self) -> None:
         self.assertIsNotNone(detect_danger("bash -lc 'rm -rf ./build'"))
+        self.assertIsNotNone(detect_danger("bash -ec 'rm -rf ./build'"))
+        self.assertIsNotNone(detect_danger("sh -uc 'git push --force origin main'"))
         self.assertIsNotNone(detect_danger("sh -c 'git push --force origin main'"))
         self.assertIsNotNone(detect_danger("zsh -c 'DELETE FROM accounts'"))
 
@@ -49,6 +51,7 @@ class GuardDetectionTests(unittest.TestCase):
             "echo 'DROP TABLE accounts'",
             "python -c \"print('DROP TABLE accounts')\"",
             "bash -lc \"echo 'rm -rf ./build'\"",
+            "bash -e 'echo safe'",
             "sh -c 'echo DELETE FROM accounts'",
             "npm test",
         ):

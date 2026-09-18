@@ -171,10 +171,16 @@ def _wrapped_script(segment: list[str]) -> str | None:
         return None
     args = segment[index + 1 :]
     for position, token in enumerate(args):
-        # ``sh -c SCRIPT`` and ``sh -lc SCRIPT`` are the useful forms here.
-        # Stop at the first argument that consumes the next token as a script.
+        # ``sh -c SCRIPT`` and ``sh -lc SCRIPT`` are the common forms.  Shell
+        # options may be combined (for example ``bash -ec SCRIPT``), so look
+        # for ``c`` in a short-option cluster as well.  Long options and
+        # unrelated operands are left alone to avoid treating their values as
+        # executable shell source.
         if token in {"-c", "-lc", "-cl"} and position + 1 < len(args):
             return args[position + 1]
+        if token.startswith("-") and not token.startswith("--") and "c" in token[1:]:
+            if position + 1 < len(args):
+                return args[position + 1]
     return None
 
 
