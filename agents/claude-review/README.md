@@ -21,7 +21,14 @@ a claim that Claude reviewed the PR.
 The client accepts only HTTPS `github.com` pull-request URLs, caps fetched
 diffs at 1 MB, never executes the target repository, and does not print API
 keys. The Claude request is limited to the PR metadata and diff; the repository
-is not granted credentials or write access.
+is not granted credentials or write access. PR titles, bodies, and diffs are
+treated as untrusted data: instructions embedded in a diff are not followed,
+and the reviewer does not post comments or modify repositories. The local
+baseline also flags common destructive shell/SQL patterns such as `rm -rf`,
+`git push --force`, `DROP TABLE`, `TRUNCATE`, and unqualified `DELETE FROM` for
+explicit maintainer review.
+The baseline also flags common prompt-injection and credential-exfiltration
+phrases in PR content so they remain review data rather than instructions.
 
 ## Output contract
 
