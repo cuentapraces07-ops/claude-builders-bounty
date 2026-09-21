@@ -91,6 +91,23 @@ class HookInvocationTests(unittest.TestCase):
         self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
         self.assertEqual(output.getvalue(), "")
 
+    def test_cmd_alias_uses_the_same_pretooluse_wire_format(self) -> None:
+        output = io.StringIO()
+        payload = {"tool_name": "Bash", "tool_input": {"cmd": "rm -rf ./build"}}
+        self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+        decision = json.loads(output.getvalue())
+        self.assertEqual(decision["hookSpecificOutput"]["hookEventName"], "PreToolUse")
+        self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_logging_failure_still_denies_the_command(self) -> None:
+        output = io.StringIO()
+        payload = {"tool_name": "Bash", "tool_input": {"command": "DROP TABLE accounts"}}
+        with mock.patch.object(Path, "open", side_effect=OSError("disk full")):
+            self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+        decision = json.loads(output.getvalue())
+        self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("DROP TABLE", decision["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_non_bash_tool_is_ignored(self) -> None:
         output = io.StringIO()
         payload = {"tool_name": "Read", "tool_input": {"command": "rm -rf /"}}
