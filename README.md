@@ -18,7 +18,9 @@ You're in the right place.
 **To claim a bounty**
 1. Browse the open issues below
 2. Comment `/opire try` in the issue you want to work on
-3. Submit a PR — payment is automatic on merge ✅
+3. Submit a PR — the board advertises automatic payment on merge, but the
+   current Opire funding, maintainer acceptance, and payout state must be
+   verified before treating any reward as payable.
 
 ---
 
