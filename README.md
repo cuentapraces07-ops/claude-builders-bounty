@@ -63,6 +63,18 @@ Setup and use it in three steps:
 Use `--base <revision>` to choose an explicit baseline, `--output <path>` to
 write elsewhere, or `--stdout` to preview without changing a file.
 
+## Verification
+
+Run the dependency-free test suite from the repository root:
+
+```text
+python -m unittest discover -s tests -v
+```
+
+The suite covers conventional-commit classification, real git history since a
+tag, empty ranges, deterministic dates, and the CLI's stdout path. The current
+local run completes with 3 tests passing.
+
 ---
 
 *Started by the Claude builder community · March 2026 · MIT License*
