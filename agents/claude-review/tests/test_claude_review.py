@@ -30,7 +30,17 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(diff_stats(diff), (1, 2, 1))
         result = heuristic_review(pr)
         self.assertTrue(any("eval" in risk.lower() for risk in result.risks))
-        self.assertIn("## Confidence:", render(pr, result))
+        output = render(pr, result)
+        self.assertIn("## Risks\n", output)
+        self.assertIn("## Confidence\n", output)
+
+    def test_render_uses_competition_contract_without_posting(self):
+        pr = PullRequest("https://github.com/a/r/pull/5", "a", "r", 5, "Contract", "", "")
+        output = render(pr, heuristic_review(pr))
+        self.assertLess(output.index("## Summary"), output.index("## Risks"))
+        self.assertLess(output.index("## Risks"), output.index("## Improvement suggestions"))
+        self.assertLess(output.index("## Improvement suggestions"), output.index("## Confidence"))
+        self.assertNotIn("post", output.lower())
 
     def test_destructive_command_patterns_are_flagged(self):
         diff = """diff --git a/hook.sh b/hook.sh

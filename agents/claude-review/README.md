@@ -32,10 +32,11 @@ phrases in PR content so they remain review data rather than instructions.
 
 ## Output contract
 
-Every report contains a 2–3 sentence summary, an identified-risks list,
-improvement suggestions, and a `Low`/`Medium`/`High` confidence score. The
-engine and diff scope are recorded so a reviewer can distinguish an API review
-from the offline baseline.
+Every report uses the four-section contract `Summary`, `Risks`, `Improvement
+suggestions`, and `Confidence` (`Low`/`Medium`/`High`). The engine and diff
+scope are recorded as metadata so a reviewer can distinguish an API review
+from the offline baseline. The CLI only emits a report; it never posts a
+comment or changes a repository.
 
 ## Tests
 

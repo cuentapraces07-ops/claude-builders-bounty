@@ -267,13 +267,13 @@ def render(pr: PullRequest, result: Review) -> str:
         "",
         result.summary,
         "",
-        "## Identified risks",
+        "## Risks",
         "",
     ]
     lines.extend(f"- {risk}" for risk in result.risks)
     lines.extend(["", "## Improvement suggestions", ""])
     lines.extend(f"- {suggestion}" for suggestion in result.suggestions)
-    lines.extend(["", f"## Confidence: {result.confidence}", ""])
+    lines.extend(["", "## Confidence", "", result.confidence, ""])
     return "\n".join(lines)
 
 
