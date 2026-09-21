@@ -78,6 +78,8 @@ class HookInvocationTests(unittest.TestCase):
             decision = json.loads(output.getvalue())
             self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertIn("forced git push", decision["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertIn("Safe alternative", decision["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertIn("new branch", decision["hookSpecificOutput"]["permissionDecisionReason"])
             record = json.loads((Path(directory) / "blocked.log").read_text(encoding="utf-8").strip())
             self.assertEqual(record["attempted_command"], "git push --force origin main")
             self.assertEqual(record["project_path"], "/workspace/example")

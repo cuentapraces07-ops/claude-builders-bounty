@@ -239,13 +239,27 @@ def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
 
 
 def _write_deny(stdout: TextIO, reason: str) -> None:
+    alternatives = {
+        "rm with both recursive and force flags (rm -rf) can erase an entire tree.":
+            "inspect the exact path first (for example with `git clean -nd`) and remove only the named target",
+        "a forced git push can rewrite shared history.":
+            "push a new branch normally; history rewrites require explicit human approval",
+        "DROP TABLE is destructive and is blocked by this hook.":
+            "use a reviewed migration with a backup and an explicit table name",
+        "TRUNCATE is destructive and is blocked by this hook.":
+            "use a reviewed, scoped transaction after previewing the rows to remove",
+        "DELETE FROM without a WHERE clause can remove every row.":
+            "add a narrowly scoped WHERE clause and run a SELECT preview first",
+    }
+    safe_alternative = alternatives.get(reason, "review the command and narrow its scope before retrying")
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"Blocked by destructive-command-guard: {reason} "
-                "The command was not run; review it and use a narrower, reversible operation."
+                "The command was not run. Safe alternative: "
+                f"{safe_alternative}."
             ),
         }
     }

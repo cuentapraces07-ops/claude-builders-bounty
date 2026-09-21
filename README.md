@@ -49,7 +49,9 @@ denies `rm -rf`, `git push --force`, `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
 without a `WHERE` clause. Every denial is appended as one JSON line to
 `~/.claude/hooks/blocked.log`, including the UTC timestamp, attempted command,
 and project path. Ordinary commands (including scoped SQL deletes) remain
-untouched. The denial response contains a clear explanation for Claude.
+untouched. The denial response contains a clear explanation for Claude and a
+safer, scoped alternative (for example, previewing files before removal,
+pushing a new branch, or adding a reviewed SQL predicate).
 
 From the repository root, install it and merge its `PreToolUse` matcher into
 your existing Claude settings with one command:
