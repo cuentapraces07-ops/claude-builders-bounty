@@ -1,6 +1,8 @@
 import io
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
 import unittest
 import urllib.error
@@ -9,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from claude_review import (
+    CLAUDE_MODEL,
     CLAUDE_SYSTEM_PROMPT,
     PullRequest,
     _claude_review,
@@ -25,6 +28,19 @@ from claude_review import (
 
 
 class ReviewTests(unittest.TestCase):
+    def test_documented_repository_entrypoint_is_executable(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        entrypoint = repo_root / "bin" / "claude-review"
+        result = subprocess.run(
+            [sys.executable, str(entrypoint), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--pr", result.stdout)
+        self.assertIn("--offline", result.stdout)
+
     def test_parse_pull_url(self):
         self.assertEqual(parse_pull_url("https://github.com/a-b/repo_1/pull/42"), ("a-b", "repo_1", 42))
 
@@ -237,6 +253,9 @@ class ReviewTests(unittest.TestCase):
 
         request = urlopen.call_args.args[0]
         request_payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request_payload["model"], CLAUDE_MODEL)
+        self.assertEqual(CLAUDE_MODEL, "claude-sonnet-4-6")
+        self.assertIn(CLAUDE_MODEL, result.mode)
         prompt = request_payload["messages"][0]["content"]
         self.assertIn("first 8,000 of 8,001 characters", prompt)
         self.assertIn("first 50,000 of 50,001 characters", prompt)

@@ -2,7 +2,7 @@
 
 This directory contains a dependency-free CLI that fetches a public GitHub PR,
 reviews its diff, and emits a structured Markdown report. With
-`ANTHROPIC_API_KEY` set it calls `claude-sonnet-4-20250514`; with no key it
+`ANTHROPIC_API_KEY` set it calls `claude-sonnet-4-6`; with no key it
 falls back to a deterministic local baseline and labels that mode in the
 report. `--offline` disables Anthropic API calls but still fetches the public
 GitHub metadata and diff; it is not a network-free mode. The fallback is not
@@ -61,3 +61,8 @@ python -m unittest discover -s agents/claude-review/tests -v
 Two real public pull requests are included in `samples/`; they were fetched
 without credentials and rendered with `--offline` so the sample output is
 reproducible without an API key.
+
+The original implementation used `claude-sonnet-4-20250514`, which Anthropic
+retired on June 15, 2026. This implementation uses Anthropic's documented
+replacement, `claude-sonnet-4-6`; no live API call is made by the offline
+tests.
