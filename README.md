@@ -48,12 +48,18 @@ You're in the right place.
 This repository includes `hooks/destructive_command_guard.py`, a dependency-free
 Claude Code `PreToolUse` hook for the bounty in [issue #3](../../issues/3). It
 denies `rm -rf`, `git push --force`, `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
-without a `WHERE` clause. Every denial is appended as one JSON line to
-`~/.claude/hooks/blocked.log`, including the UTC timestamp, attempted command,
-and project path. Ordinary commands (including scoped SQL deletes) remain
-untouched. The denial response contains a clear explanation for Claude and a
-safer, scoped alternative (for example, previewing files before removal,
-pushing a new branch, or adding a reviewed SQL predicate).
+without a `WHERE` clause. It also inspects `$(...)`, backticks, and process
+substitutions for nested destructive commands, while leaving single-quoted and
+escaped examples untouched; shell nesting deeper than 32 levels is denied
+conservatively. Every denial is appended as one JSON line to
+`~/.claude/hooks/blocked.log`, including the UTC timestamp, a best-effort
+redacted and length-limited attempted command, and project path. Common secret
+flags, credential assignments, bearer values, credential-bearing URLs, and
+recognizable API-key formats are redacted before logging. Ordinary commands
+(including scoped SQL deletes) remain untouched. The denial response contains
+a clear explanation for Claude and a safer, scoped alternative (for example,
+previewing files before removal, pushing a new branch, or adding a reviewed SQL
+predicate).
 
 From the repository root, install it and merge its `PreToolUse` matcher into
 your existing Claude settings with one command:

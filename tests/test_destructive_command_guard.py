@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
-from hooks.destructive_command_guard import detect_danger, main
+from hooks.destructive_command_guard import _redact_command_for_log, detect_danger, main
 from hooks.install import install
 
 
@@ -29,6 +32,31 @@ class GuardDetectionTests(unittest.TestCase):
         self.assertIsNotNone(detect_danger("sh -uc 'git push --force origin main'"))
         self.assertIsNotNone(detect_danger("sh -c 'git push --force origin main'"))
         self.assertIsNotNone(detect_danger("zsh -c 'DELETE FROM accounts'"))
+
+    def test_blocks_dangerous_commands_inside_shell_substitutions(self) -> None:
+        for command in (
+            'echo "$(rm -rf ./build)"',
+            "target=$(git push --force origin main)",
+            "echo `rm -rf ./build`",
+            "cat <(psql -c 'DELETE FROM accounts')",
+            "cat >(sqlite3 db.sqlite 'DROP TABLE users')",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+
+    def test_allows_quoted_or_escaped_substitution_examples(self) -> None:
+        for command in (
+            "echo '$(rm -rf ./build)'",
+            'echo "\\$(rm -rf ./build)"',
+            "echo '`git push --force origin main`'",
+            'echo "literal rm -rf ./build"',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(detect_danger(command))
+
+    def test_excessive_shell_nesting_is_blocked_without_recursing_unboundedly(self) -> None:
+        command = "echo " + "$(" * 40 + "rm -rf ./build" + ")" * 40
+        self.assertIn("inspection limit", detect_danger(command))
 
     def test_blocks_destructive_sql(self) -> None:
         self.assertIsNotNone(detect_danger("DROP TABLE accounts"))
@@ -85,6 +113,59 @@ class HookInvocationTests(unittest.TestCase):
             self.assertEqual(record["project_path"], "/workspace/example")
             self.assertIn("timestamp", record)
 
+    def test_pretooluse_denies_nested_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": 'echo "$(rm -rf ./build)"'},
+            }
+            with mock.patch.dict("os.environ", {"CLAUDE_HOOKS_DIR": directory}, clear=False):
+                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+            decision = json.loads(output.getvalue())
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_redacts_credentials_before_persisting_blocked_command(self) -> None:
+        command = (
+            "git push --force origin main --token cli-secret "
+            '--api-key="key with spaces" PASSWORD=env-secret '
+            'Authorization: "basic header-secret" '
+            "-H 'X-Trace: Bearer bearer-secret' "
+            "https://build-user:url-secret@example.test/repo "
+            "github_pat_0123456789abcdefghijklmnop"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+            with mock.patch.dict("os.environ", {"CLAUDE_HOOKS_DIR": directory}, clear=False):
+                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+
+            decision = json.loads(output.getvalue())
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            log_text = (Path(directory) / "blocked.log").read_text(encoding="utf-8")
+            for secret in (
+                "cli-secret",
+                "key with spaces",
+                "env-secret",
+                "basic header-secret",
+                "bearer-secret",
+                "build-user:url-secret",
+                "github_pat_0123456789abcdefghijklmnop",
+            ):
+                with self.subTest(secret=secret):
+                    self.assertNotIn(secret, log_text)
+            record = json.loads(log_text.strip())
+            self.assertIn("--token [REDACTED]", record["attempted_command"])
+            self.assertIn('--api-key="[REDACTED]"', record["attempted_command"])
+            self.assertIn("PASSWORD=[REDACTED]", record["attempted_command"])
+            self.assertIn('X-Trace: Bearer [REDACTED]', record["attempted_command"])
+            self.assertIn("https://[REDACTED]@example.test", record["attempted_command"])
+
+    def test_truncates_oversized_commands_in_the_audit_log(self) -> None:
+        logged = _redact_command_for_log("rm -rf ./build " + "x" * 5000)
+        self.assertLessEqual(len(logged), 4014)
+        self.assertTrue(logged.endswith("…[TRUNCATED]"))
+
     def test_safe_command_is_silent(self) -> None:
         output = io.StringIO()
         payload = {"tool_name": "Bash", "tool_input": {"command": "git status"}}
@@ -130,6 +211,31 @@ class InstallerTests(unittest.TestCase):
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(len(settings["hooks"]["PreToolUse"]), 2)
             self.assertTrue((home / ".claude" / "hooks" / "destructive_command_guard.py").exists())
+
+    def test_installed_hook_processes_real_pretooluse_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installed = install(home)
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": 'echo "$(rm -rf ./build)"'},
+                "cwd": str(home),
+            }
+            environment = os.environ.copy()
+            environment["CLAUDE_HOOKS_DIR"] = str(installed.parent)
+            result = subprocess.run(
+                [sys.executable, str(installed)],
+                input=json.dumps(payload),
+                capture_output=True,
+                check=False,
+                env=environment,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            decision = json.loads(result.stdout)
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertTrue((installed.parent / "blocked.log").is_file())
 
 
 if __name__ == "__main__":

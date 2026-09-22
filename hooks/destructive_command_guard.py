@@ -29,10 +29,53 @@ _SQL_CLIENTS = {
     "sqlcmd",
 }
 _SHELL_WRAPPERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
+_MAX_SHELL_NESTING = 32
 _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
 _SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
 _WHERE_RE = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_LOG_VALUE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|,]+)'''
+_SECRET_NAME = (
+    r"[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[-_]?key|"
+    r"access[-_]?key|private[-_]?key|authorization|credential)[A-Za-z0-9_-]*"
+)
+_SECRET_FLAG_EQUALS_RE = re.compile(
+    rf"(?i)(--{_SECRET_NAME}\s*=\s*)({_LOG_VALUE})"
+)
+_SECRET_FLAG_ARGUMENT_RE = re.compile(
+    rf"(?i)(--{_SECRET_NAME}\s+)({_LOG_VALUE})"
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"(?i)((?:[\"']?{_SECRET_NAME}[\"']?)\s*[:=]\s*)({_LOG_VALUE})"
+)
+_BEARER_VALUE_RE = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/-]+=*")
+_URL_CREDENTIALS_RE = re.compile(r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@")
+_COMMON_TOKEN_RE = re.compile(
+    r"(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16})\b"
+)
+
+
+def _redacted_value(match: re.Match[str]) -> str:
+    """Keep the original quoting while replacing a matched secret value."""
+    value = match.group(2)
+    quote = (
+        value[0]
+        if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]
+        else ""
+    )
+    return f"{match.group(1)}{quote}[REDACTED]{quote}"
+
+
+def _redact_command_for_log(command: str) -> str:
+    """Best-effort redact credentials before persisting an attempted command."""
+    sanitized = _SECRET_FLAG_EQUALS_RE.sub(_redacted_value, command)
+    sanitized = _SECRET_FLAG_ARGUMENT_RE.sub(_redacted_value, sanitized)
+    sanitized = _SECRET_ASSIGNMENT_RE.sub(_redacted_value, sanitized)
+    sanitized = _BEARER_VALUE_RE.sub(r"\1[REDACTED]", sanitized)
+    sanitized = _URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", sanitized)
+    sanitized = _COMMON_TOKEN_RE.sub("[REDACTED]", sanitized)
+    return sanitized[:4000] + ("…[TRUNCATED]" if len(sanitized) > 4000 else "")
 
 
 def _shell_tokens(command: str) -> list[str]:
@@ -184,11 +227,161 @@ def _wrapped_script(segment: list[str]) -> str | None:
     return None
 
 
+def _balanced_command_substitution(command: str, start: int) -> tuple[str, int] | None:
+    """Return the body/end of a balanced ``$(...)`` or process substitution.
+
+    Parentheses inside quotes and backticks do not affect the outer balance;
+    nested shell groups and nested substitutions do. This is intentionally a
+    small scanner, not a general-purpose Bash parser.
+    """
+
+    if start + 1 >= len(command) or command[start + 1] != "(":
+        return None
+    depth = 1
+    index = start + 2
+    quote: str | None = None
+    escaped = False
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            index += 1
+            continue
+        if quote == "`":
+            if char == "`":
+                quote = None
+            index += 1
+            continue
+        if char == "`":
+            quote = "`"
+            index += 1
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+                index += 1
+                continue
+            if command.startswith("$(", index):
+                depth += 1
+                index += 2
+                continue
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if command.startswith("$(", index) or command.startswith("<(", index) or command.startswith(">(", index):
+            depth += 1
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return command[start + 2 : index], index + 1
+        index += 1
+    return None
+
+
+def _backtick_substitution(command: str, start: int) -> tuple[str, int] | None:
+    index = start + 1
+    body: list[str] = []
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and index + 1 < len(command):
+            next_char = command[index + 1]
+            if next_char in {"$", "`", "\\"}:
+                body.append(next_char)
+            else:
+                body.extend((char, next_char))
+            index += 2
+            continue
+        if char == "`":
+            return "".join(body), index + 1
+        body.append(char)
+        index += 1
+    return None
+
+
+def _shell_substitutions(command: str) -> Iterable[str]:
+    """Yield executable command-substitution bodies, excluding single quotes."""
+
+    index = 0
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+                index += 1
+                continue
+            if char == '`':
+                parsed = _backtick_substitution(command, index)
+                if parsed:
+                    body, index = parsed
+                    yield body
+                    continue
+            if command.startswith("$(", index):
+                parsed = _balanced_command_substitution(command, index)
+                if parsed:
+                    body, index = parsed
+                    yield body
+                    continue
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == '`':
+            parsed = _backtick_substitution(command, index)
+            if parsed:
+                body, index = parsed
+                yield body
+                continue
+        if command.startswith("$(", index) or command.startswith("<(", index) or command.startswith(">(", index):
+            parsed = _balanced_command_substitution(command, index)
+            if parsed:
+                body, index = parsed
+                yield body
+                continue
+        index += 1
+
+
 def detect_danger(command: str) -> str | None:
     """Return a human-readable block reason, or ``None`` for safe commands."""
 
+    return _detect_danger(command, 0)
+
+
+def _detect_danger(command: str, depth: int) -> str | None:
     if not isinstance(command, str) or not command.strip():
         return None
+    if depth > _MAX_SHELL_NESTING:
+        return "nested shell expansions exceed the inspection limit and are blocked conservatively."
+    for substitution in _shell_substitutions(command):
+        reason = _detect_danger(substitution, depth + 1)
+        if reason:
+            return reason
     tokens = _shell_tokens(command)
     for segment in _segments(tokens):
         reason = _rm_reason(segment) or _git_force_reason(segment) or _sql_reason(segment)
@@ -199,7 +392,7 @@ def detect_danger(command: str) -> str | None:
         # bounded by the command's token count, and an empty script is safe.
         wrapped = _wrapped_script(segment)
         if wrapped:
-            reason = detect_danger(wrapped)
+            reason = _detect_danger(wrapped, depth + 1)
             if reason:
                 return reason
     return None
@@ -224,7 +417,7 @@ def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
     log_path = Path(os.environ.get("CLAUDE_HOOK_LOG", str(hooks_dir / "blocked.log"))).expanduser()
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "attempted_command": command,
+        "attempted_command": _redact_command_for_log(command),
         "project_path": payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
         "reason": reason,
     }
