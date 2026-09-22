@@ -40,6 +40,8 @@ class GuardDetectionTests(unittest.TestCase):
             "sudo -u root rm -rf /tmp/build",
             "sudo --user=root -- git push --force origin main",
             "env DEBUG=1 sudo -u root git push --force origin main",
+            "env -S 'rm -rf ./build'",
+            "env --split-string='git push --force origin main'",
             "nohup rm -rf ./build",
         ):
             with self.subTest(command=command):

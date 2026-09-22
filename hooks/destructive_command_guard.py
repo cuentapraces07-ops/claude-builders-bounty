@@ -187,6 +187,40 @@ def _executable_index(segment: list[str]) -> int:
     return index
 
 
+def _env_split_script(segment: list[str]) -> str | None:
+    """Return the command string passed to ``env -S`` when present."""
+
+    index = 0
+    while index < len(segment) and _is_assignment(segment[index]):
+        index += 1
+    if index >= len(segment) or Path(segment[index]).name.lower() != "env":
+        return None
+
+    args = segment[index + 1 :]
+    position = 0
+    while position < len(args):
+        token = args[position]
+        if token == "--":
+            return None
+        if token in {"-S", "--split-string"}:
+            return args[position + 1] if position + 1 < len(args) else None
+        if token.startswith("--split-string="):
+            return token.partition("=")[2]
+        if _is_assignment(token) or token in {"-i", "--ignore-environment", "-0", "--null"}:
+            position += 1
+        elif token in {"-C", "--chdir", "-u", "--unset"}:
+            position += 2
+        elif token.startswith(("--chdir=", "--unset=")) or (
+            token.startswith("-u") and token != "-u"
+        ):
+            position += 1
+        elif token.startswith("-"):
+            position += 1
+        else:
+            return None
+    return None
+
+
 def _rm_reason(segment: list[str]) -> str | None:
     index = _executable_index(segment)
     if index >= len(segment) or Path(segment[index]).name != "rm":
@@ -444,6 +478,11 @@ def _detect_danger(command: str, depth: int) -> str | None:
             return reason
     tokens = _shell_tokens(command)
     for segment in _segments(tokens):
+        split_script = _env_split_script(segment)
+        if split_script is not None:
+            reason = _detect_danger(split_script, depth + 1)
+            if reason:
+                return reason
         reason = _rm_reason(segment) or _git_force_reason(segment) or _sql_reason(segment)
         if reason:
             return reason
