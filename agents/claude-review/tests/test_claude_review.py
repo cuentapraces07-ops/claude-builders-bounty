@@ -194,6 +194,63 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(any("destructive" in risk.lower() for risk in result.risks))
         self.assertEqual(result.confidence, "Low")
 
+    def test_pull_request_comment_workflow_warns_about_fork_token_permissions(self):
+        diff = """diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/review.yml
+@@ -0,0 +1,9 @@
++name: PR review
++on:
++  pull_request:
++permissions:
++  pull-requests: write
++jobs:
++  review:
++    steps:
++      - run: python reviewer.py --post
+"""
+        pr = PullRequest("https://github.com/a/r/pull/16", "a", "r", 16, "Comment workflow", "", diff)
+        result = heuristic_review(pr)
+        self.assertTrue(any("Fork-originated PRs" in risk for risk in result.risks))
+        self.assertTrue(any("manual-approval path" in suggestion for suggestion in result.suggestions))
+        self.assertEqual(result.confidence, "Low")
+
+    def test_pull_request_workflow_without_comment_posting_has_no_fork_token_warning(self):
+        diff = """diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/test.yml
+@@ -0,0 +1,5 @@
++name: Tests
++on:
++  pull_request:
++permissions:
++  contents: read
+"""
+        pr = PullRequest("https://github.com/a/r/pull/17", "a", "r", 17, "Test workflow", "", diff)
+        result = heuristic_review(pr)
+        self.assertFalse(any("Fork-originated PRs" in risk for risk in result.risks))
+
+    def test_pull_request_comment_warning_uses_unchanged_hunk_context(self):
+        diff = """diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml
+--- a/.github/workflows/review.yml
++++ b/.github/workflows/review.yml
+@@ -1,7 +1,7 @@
+ name: PR review
+ on:
+   pull_request:
+ permissions:
+   pull-requests: write
+ jobs:
+   review:
+-      - run: python reviewer.py
++      - run: python reviewer.py --post
+"""
+        pr = PullRequest("https://github.com/a/r/pull/18", "a", "r", 18, "Updated comment step", "", diff)
+        result = heuristic_review(pr)
+        self.assertTrue(any("Fork-originated PRs" in risk for risk in result.risks))
+
     def test_risk_matches_in_test_fixtures_are_contextualized(self):
         diff = """diff --git a/tests/test_review.py b/tests/test_review.py
 --- a/tests/test_review.py

@@ -38,6 +38,11 @@ baseline also flags common destructive shell/SQL patterns such as `rm -rf`,
 explicit maintainer review.
 The baseline also flags common prompt-injection and credential-exfiltration
 phrases in PR content so they remain review data rather than instructions.
+It also warns when a changed GitHub Actions workflow both runs on `pull_request`
+and posts a comment: fork-originated runs commonly receive a read-only
+`GITHUB_TOKEN` unless repository or organization settings explicitly allow
+write tokens. Verify the fork policy instead of switching to
+`pull_request_target` without a separate security review.
 Claude's response is parsed as a bounded JSON review: the summary must contain
 2–3 sentences, list fields must contain strings, oversized output is rejected,
 and invalid responses fall back to a deterministic three-sentence local pass.

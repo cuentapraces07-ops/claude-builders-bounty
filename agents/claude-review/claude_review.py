@@ -223,6 +223,25 @@ def _added_diff_lines(diff: str) -> tuple[tuple[str, str], ...]:
     return tuple(additions)
 
 
+def _diff_hunk_lines(diff: str) -> tuple[tuple[str, str], ...]:
+    """Return added and unchanged context lines from changed-file hunks."""
+
+    current_path: str | None = None
+    in_hunk = False
+    lines: list[tuple[str, str]] = []
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current_path = None
+            in_hunk = False
+        elif not in_hunk and line.startswith("+++ b/"):
+            current_path = line[6:]
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and current_path is not None and line.startswith((" ", "+")):
+            lines.append((current_path, line[1:]))
+    return tuple(lines)
+
+
 def _is_test_or_fixture_path(path: str) -> bool:
     """Recognize common test/fixture paths for contextual risk wording."""
 
@@ -293,6 +312,33 @@ def heuristic_review(pr: PullRequest) -> Review:
                 f"{message} Matching file(s): {paths}{more}. This heuristic match is not proof of an exploitable issue; "
                 "inspect the exact added lines, since detector rules, examples, and fixtures can also match."
             )
+
+    workflow_lines = tuple(
+        (path, content)
+        for path, content in _diff_hunk_lines(pr.diff)
+        if path.replace("\\", "/").lower().startswith(".github/workflows/")
+    )
+    workflow_text = "\n".join(content for _, content in workflow_lines)
+    publishes_comment = re.search(
+        r"--post\b|\bgh\s+pr\s+comment\b|/issues/[^\s]*/comments\b",
+        workflow_text,
+        flags=re.IGNORECASE,
+    )
+    starts_on_pull_request = re.search(
+        r"^\s*pull_request\s*:", workflow_text, flags=re.IGNORECASE | re.MULTILINE
+    )
+    if publishes_comment and starts_on_pull_request:
+        workflow_paths = ", ".join(tuple(dict.fromkeys(path for path, _ in workflow_lines))[:3])
+        risks.append(
+            "A GitHub Actions workflow posts PR comments from a `pull_request` run. "
+            "Fork-originated PRs typically receive a read-only GITHUB_TOKEN unless repository or organization "
+            "settings explicitly allow write tokens, so the comment step may fail; workflow permissions alone "
+            f"do not necessarily override that policy. Matching workflow(s): {workflow_paths}."
+        )
+        suggestions.append(
+            "Document and test the fork-PR token policy; if comment writes are required, use a trusted "
+            "follow-up or manual-approval path instead of exposing a write token while running untrusted PR code."
+        )
 
     has_findings = bool(risks)
     if not risks:
