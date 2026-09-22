@@ -19,6 +19,8 @@ from pathlib import Path
 
 SECTIONS = ("Added", "Fixed", "Changed", "Removed")
 _CONVENTIONAL = re.compile(r"^(?P<kind>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<body>.+)$", re.I)
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]<>()#+\-.!|])")
+_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -105,8 +107,25 @@ def classify(subject: str) -> tuple[str, str]:
     return "Changed", readable
 
 
+def escape_markdown_text(value: str) -> str:
+    """Keep untrusted Git metadata as plain text in the generated Markdown."""
+    flattened = value.replace("\r", " ").replace("\n", " ").strip()
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", flattened)
+
+
+def generation_date(generated: str | None = None) -> str:
+    value = generated or os.environ.get("CHANGELOG_DATE") or datetime.now(timezone.utc).date().isoformat()
+    if not _DATE_PATTERN.fullmatch(value):
+        raise ValueError("date must be a valid YYYY-MM-DD value")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("date must be a valid YYYY-MM-DD value") from exc
+    return value
+
+
 def markdown(repo: Path, commits: list[Commit], base: str | None, generated: str | None = None) -> str:
-    date = generated or os.environ.get("CHANGELOG_DATE") or datetime.now(timezone.utc).date().isoformat()
+    date = generation_date(generated)
     title = f" since `{base}`" if base else ""
     lines = ["# Changelog", "", f"Generated on {date}{title}.", "", "## Unreleased", ""]
     grouped: dict[str, list[tuple[Commit, str]]] = {section: [] for section in SECTIONS}
@@ -125,8 +144,9 @@ def markdown(repo: Path, commits: list[Commit], base: str | None, generated: str
                 lines.append("- None.")
             else:
                 for commit, readable in entries:
-                    safe = readable.replace("\r", " ").replace("\n", " ").strip()
-                    lines.append(f"- {safe} ([`{commit.sha[:7]}`](https://github.com/{github_slug(repo)}/commit/{commit.sha})) — {commit.author}")
+                    safe_subject = escape_markdown_text(readable)
+                    safe_author = escape_markdown_text(commit.author)
+                    lines.append(f"- {safe_subject} ([`{commit.sha[:7]}`](https://github.com/{github_slug(repo)}/commit/{commit.sha})) — {safe_author}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

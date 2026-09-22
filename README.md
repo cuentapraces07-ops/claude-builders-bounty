@@ -58,7 +58,8 @@ the full commit history. It is safe to run repeatedly.
 Setup and use it in three steps:
 
 1. Clone this repository and enter the project directory.
-2. Run `bash changelog.sh` (or `python3 scripts/changelog.py`).
+2. Run `bash changelog.sh` (or `python3 scripts/changelog.py`), or invoke
+   `/generate-changelog` from Claude Code.
 3. Review the generated `CHANGELOG.md` and commit it with your release.
 
 Use `--base <revision>` to choose an explicit baseline, `--output <path>` to
