@@ -21,6 +21,7 @@ from typing import Iterable
 
 
 MAX_DIFF_BYTES = 1_000_000
+MAX_GITHUB_FILE_PAGES = 5
 MAX_CLAUDE_BODY_CHARS = 8_000
 MAX_CLAUDE_DIFF_CHARS = 50_000
 CLAUDE_SYSTEM_PROMPT = (
@@ -46,6 +47,7 @@ class PullRequest:
     title: str
     body: str
     diff: str
+    diff_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,9 +91,7 @@ def fetch_pull(url: str) -> PullRequest:
         or not metadata["title"].strip()
     ):
         raise ValueError("GitHub API returned no pull-request metadata")
-    diff = _request(f"https://github.com/{owner}/{repo}/pull/{number}.diff", "text/plain").decode(
-        "utf-8", errors="replace"
-    )
+    diff, diff_complete = fetch_pull_diff(owner, repo, number)
     return PullRequest(
         url=url.rstrip("/"),
         owner=owner,
@@ -100,7 +100,74 @@ def fetch_pull(url: str) -> PullRequest:
         title=str(metadata["title"]),
         body=str(metadata.get("body") or ""),
         diff=diff,
+        diff_complete=diff_complete,
     )
+
+
+def _escape_git_path(path: str) -> str:
+    """Keep unusual GitHub paths from injecting extra diff header lines."""
+
+    return path.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+
+
+def _fetch_file_api_diff(owner: str, repo: str, number: int) -> tuple[str, bool]:
+    """Rebuild a bounded unified diff from GitHub's PR-files API."""
+
+    chunks: list[str] = []
+    complete = True
+    for page in range(1, MAX_GITHUB_FILE_PAGES + 1):
+        api_url = (
+            f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files"
+            f"?per_page=100&page={page}"
+        )
+        entries = json.loads(_request(api_url, "application/vnd.github+json").decode("utf-8"))
+        if not isinstance(entries, list):
+            raise ValueError("GitHub files API returned an invalid response")
+
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
+                raise ValueError("GitHub files API returned an invalid file entry")
+            filename = _escape_git_path(entry["filename"])
+            previous = entry.get("previous_filename")
+            old_filename = _escape_git_path(previous if isinstance(previous, str) else entry["filename"])
+            status = entry.get("status")
+            old_marker = "/dev/null" if status == "added" else f"a/{old_filename}"
+            new_marker = "/dev/null" if status == "removed" else f"b/{filename}"
+            chunks.append(
+                f"diff --git a/{old_filename} b/{filename}\n"
+                f"--- {old_marker}\n+++ {new_marker}\n"
+            )
+            patch = entry.get("patch")
+            if isinstance(patch, str):
+                chunks.append(patch.rstrip("\n") + "\n")
+            else:
+                complete = False
+                chunks.append("[GitHub omitted this file patch; inspect the file directly]\n")
+
+        if len(entries) < 100:
+            break
+        if page == MAX_GITHUB_FILE_PAGES:
+            complete = False
+            chunks.append("[GitHub file list truncated after the configured page limit]\n")
+
+    diff = "".join(chunks)
+    if len(diff.encode("utf-8")) > MAX_DIFF_BYTES:
+        raise ValueError(f"reconstructed diff exceeded {MAX_DIFF_BYTES} bytes")
+    return diff, complete
+
+
+def fetch_pull_diff(owner: str, repo: str, number: int) -> tuple[str, bool]:
+    diff_url = f"https://github.com/{owner}/{repo}/pull/{number}.diff"
+    try:
+        diff = _request(diff_url, "text/plain").decode("utf-8", errors="replace")
+        return diff, True
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as diff_error:
+        try:
+            return _fetch_file_api_diff(owner, repo, number)
+        except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as api_error:
+            raise RuntimeError(
+                f"GitHub diff endpoint failed ({diff_error}); files API fallback failed ({api_error})"
+            ) from api_error
 
 
 def changed_files(diff: str) -> tuple[str, ...]:
@@ -137,6 +204,10 @@ def heuristic_review(pr: PullRequest) -> Review:
     lower = pr.diff.lower()
     risks: list[str] = []
     suggestions: list[str] = []
+
+    if not pr.diff_complete:
+        risks.append("GitHub omitted or truncated part of the file patches; not every changed line was reviewed.")
+        suggestions.append("Inspect the complete PR diff and omitted files before relying on this report.")
 
     patterns = (
         (
@@ -179,7 +250,7 @@ def heuristic_review(pr: PullRequest) -> Review:
     )
     # A small diff is not automatically safe: if the heuristic already found
     # a risk, keep confidence low until a human or the model can inspect it.
-    confidence = "Medium" if files and additions + deletions <= 500 and not risks else "Low"
+    confidence = "Medium" if pr.diff_complete and files and additions + deletions <= 500 and not risks else "Low"
     return Review(summary, tuple(risks), tuple(dict.fromkeys(suggestions)), confidence, "local heuristic (no Claude API key)")
 
 
@@ -293,6 +364,8 @@ def _claude_review(pr: PullRequest, api_key: str) -> Review:
         truncation_notes.append(
             f"PR diff: only the first {MAX_CLAUDE_DIFF_CHARS:,} of {len(pr.diff):,} characters were provided."
         )
+    if not pr.diff_complete:
+        truncation_notes.append("GitHub omitted or truncated one or more changed-file patches.")
     truncation_notice = ""
     if truncation_notes:
         truncation_notice = (
@@ -358,6 +431,7 @@ def render(pr: PullRequest, result: Review) -> str:
         "",
         f"- URL: {pr.url}",
         f"- Scope: {files} changed file(s), +{additions}/-{deletions}",
+        f"- Diff coverage: {'complete' if pr.diff_complete else 'partial; inspect omitted patches'}",
         f"- Engine: {result.mode}",
         "",
         "## Summary",
@@ -399,7 +473,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 handle.write(output)
         else:
             sys.stdout.write(output)
-    except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

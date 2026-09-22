@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+import urllib.error
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -15,6 +16,7 @@ from claude_review import (
     _summary_sentence_count,
     changed_files,
     diff_stats,
+    fetch_pull,
     heuristic_review,
     main,
     parse_pull_url,
@@ -58,6 +60,59 @@ class ReviewTests(unittest.TestCase):
         ):
             self.assertEqual(main(["--pr", pr.url, "--offline"]), 0)
         self.assertEqual(output.getvalue(), render(pr, heuristic_review(pr)))
+
+    def test_fetch_pull_falls_back_to_files_api_when_diff_endpoint_fails(self):
+        metadata = json.dumps({"title": "Fallback", "body": "Public PR"}).encode()
+        files = json.dumps(
+            [
+                {
+                    "filename": "src/review.py",
+                    "status": "modified",
+                    "patch": "@@ -1 +1 @@\n-old()\n+new()",
+                }
+            ]
+        ).encode()
+
+        def request(url, accept):
+            if url == "https://api.github.com/repos/a/r/pulls/7":
+                return metadata
+            if url == "https://github.com/a/r/pull/7.diff":
+                raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, None)
+            if url == "https://api.github.com/repos/a/r/pulls/7/files?per_page=100&page=1":
+                return files
+            self.fail(f"unexpected request: {url}")
+
+        with mock.patch("claude_review._request", side_effect=request):
+            pr = fetch_pull("https://github.com/a/r/pull/7")
+
+        self.assertTrue(pr.diff_complete)
+        self.assertIn("--- a/src/review.py\n+++ b/src/review.py", pr.diff)
+        self.assertEqual(diff_stats(pr.diff), (1, 1, 1))
+
+    def test_missing_github_patch_is_explicit_and_forces_low_confidence(self):
+        metadata = json.dumps({"title": "Partial", "body": ""}).encode()
+        files = json.dumps(
+            [{"filename": "large.bin", "status": "modified", "patch": None}]
+        ).encode()
+
+        def request(url, accept):
+            if url == "https://api.github.com/repos/a/r/pulls/8":
+                return metadata
+            if url == "https://github.com/a/r/pull/8.diff":
+                raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, None)
+            if url == "https://api.github.com/repos/a/r/pulls/8/files?per_page=100&page=1":
+                return files
+            self.fail(f"unexpected request: {url}")
+
+        with mock.patch("claude_review._request", side_effect=request):
+            pr = fetch_pull("https://github.com/a/r/pull/8")
+
+        result = heuristic_review(pr)
+        report = render(pr, result)
+        self.assertFalse(pr.diff_complete)
+        self.assertEqual(result.confidence, "Low")
+        self.assertIn("GitHub omitted or truncated", " ".join(result.risks))
+        self.assertIn("Diff coverage: partial", report)
 
     def test_destructive_command_patterns_are_flagged(self):
         diff = """diff --git a/hook.sh b/hook.sh

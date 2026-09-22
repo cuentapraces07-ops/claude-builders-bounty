@@ -2,6 +2,7 @@
 
 - URL: https://github.com/claude-builders-bounty/claude-builders-bounty/pull/42
 - Scope: 5 changed file(s), +537/-0
+- Diff coverage: complete
 - Engine: local heuristic (no Claude API key)
 
 ## Summary

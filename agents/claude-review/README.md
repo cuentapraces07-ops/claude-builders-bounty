@@ -19,8 +19,11 @@ a claim that Claude reviewed the PR.
    report, then inspect it before merging.
 
 The client accepts only HTTPS `github.com` pull-request URLs, caps fetched
-diffs at 1 MB, never executes the target repository, and does not print API
-keys. The Claude request is limited to the PR metadata and diff; the repository
+diffs at 1 MB, and falls back to GitHub's paginated PR-files API if the `.diff`
+endpoint fails. If GitHub omits any file patch or the page limit is reached,
+the report marks coverage partial and forces confidence to Low. It never
+executes the target repository and does not print API keys. The Claude request
+is limited to the PR metadata and diff; the repository
 is not granted credentials or write access. PR titles, bodies, and diffs are
 treated as untrusted data: instructions embedded in a diff are not followed,
 and the reviewer does not post comments or modify repositories. The local
