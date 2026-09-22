@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.changelog import classify, commits_since, main, markdown
+from scripts.changelog import classify, commits_since, latest_tag, main, markdown
 
 
 class ChangelogTests(unittest.TestCase):
@@ -34,6 +34,26 @@ class ChangelogTests(unittest.TestCase):
             self.assertIn("### Fixed", output)
             self.assertIn("correct note output", output)
             self.assertNotIn("feat: add notes", output)
+
+    def test_default_includes_full_history_when_repository_has_no_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run = lambda *args: subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            (repo / "notes.txt").write_text("initial\n", encoding="utf-8")
+            run("add", "notes.txt")
+            run("commit", "-qm", "feat: add notes")
+            (repo / "notes.txt").write_text("updated\n", encoding="utf-8")
+            run("commit", "-qam", "fix: correct note output")
+
+            self.assertIsNone(latest_tag(repo))
+            commits = commits_since(repo, None)
+            self.assertEqual([commit.subject for commit in commits], ["feat: add notes", "fix: correct note output"])
+            output = markdown(repo, commits, None, "2026-09-22")
+            self.assertIn("### Added", output)
+            self.assertIn("### Fixed", output)
 
     def test_empty_range_is_explicit_and_cli_stdout_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

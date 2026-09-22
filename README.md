@@ -52,7 +52,8 @@ You're in the right place.
 
 This repository includes a dependency-free generator that reads commits since
 the latest git tag, categorizes them as Added, Fixed, Changed, or Removed,
-and writes a structured `CHANGELOG.md`. It is safe to run repeatedly.
+and writes a structured `CHANGELOG.md`. If the repository has no tags, it uses
+the full commit history. It is safe to run repeatedly.
 
 Setup and use it in three steps:
 
