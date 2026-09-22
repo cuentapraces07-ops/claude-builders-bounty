@@ -175,13 +175,19 @@ def fetch_pull_diff(owner: str, repo: str, number: int) -> tuple[str, bool]:
 def changed_files(diff: str) -> tuple[str, ...]:
     files: list[str] = []
     old_path: str | None = None
+    in_hunk = False
     for line in diff.splitlines():
-        if line.startswith("--- a/"):
+        if line.startswith("diff --git "):
+            old_path = None
+            in_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif not in_hunk and line.startswith("--- a/"):
             old_path = line[6:]
-        elif line.startswith("+++ b/"):
+        elif not in_hunk and line.startswith("+++ b/"):
             files.append(line[6:])
             old_path = None
-        elif line == "+++ /dev/null" and old_path is not None:
+        elif not in_hunk and line == "+++ /dev/null" and old_path is not None:
             files.append(old_path)
             old_path = None
     return tuple(dict.fromkeys(files))

@@ -262,6 +262,8 @@ new file mode 100644
 """
         pr = PullRequest("https://github.com/a/r/pull/12", "a", "r", 12, "Tests", "", diff)
         result = heuristic_review(pr)
+        self.assertEqual(changed_files(diff), ("tests/test_review.py",))
+        self.assertEqual(diff_stats(diff)[0], 1)
         self.assertTrue(any("test/fixture paths" in risk for risk in result.risks))
         self.assertTrue(any("eval-like" in risk for risk in result.risks))
         self.assertTrue(any("credential-shaped" in risk for risk in result.risks))
