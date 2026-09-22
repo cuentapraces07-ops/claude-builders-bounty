@@ -498,13 +498,18 @@ def _detect_danger(command: str, depth: int) -> str | None:
 
 
 def _command_from_payload(payload: dict[str, Any]) -> str | None:
-    if payload.get("tool_name") not in {None, "Bash"}:
+    tool_name = payload.get("tool_name")
+    if tool_name is not None and not isinstance(tool_name, str):
+        raise ValueError("invalid tool name")
+    if tool_name not in {None, "Bash"}:
         return None
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
-        return None
+        raise ValueError("missing tool input")
     command = tool_input.get("command", tool_input.get("cmd"))
-    return command if isinstance(command, str) else None
+    if not isinstance(command, str):
+        raise ValueError("missing command string")
+    return command
 
 
 def _hooks_dir() -> Path:
@@ -514,20 +519,40 @@ def _hooks_dir() -> Path:
 def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
     hooks_dir = _hooks_dir()
     log_path = Path(os.environ.get("CLAUDE_HOOK_LOG", str(hooks_dir / "blocked.log"))).expanduser()
+    project_path = payload.get("cwd")
+    if not isinstance(project_path, str) or not project_path:
+        project_path = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    project_path = project_path[:4000] + ("…[TRUNCATED]" if len(project_path) > 4000 else "")
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "attempted_command": _redact_command_for_log(command),
-        "project_path": payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+        "project_path": project_path,
         "reason": reason,
     }
+    fd: int | None = None
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as log_file:
+        log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(log_path, flags, 0o600)
+        if os.name == "posix":
+            # Also restrict an existing log file, not just a newly created one.
+            os.fchmod(fd, 0o600)
+        log_file = os.fdopen(fd, "a", encoding="utf-8")
+        fd = None  # ownership moved to log_file
+        with log_file:
             log_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError:
+    except (OSError, TypeError, ValueError):
         # A logging failure must not allow a destructive operation through,
         # and must not make Claude's hook invocation fail noisily.
         pass
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _write_deny(stdout: TextIO, reason: str) -> None:
@@ -559,17 +584,31 @@ def _write_deny(stdout: TextIO, reason: str) -> None:
     stdout.write("\n")
 
 
+def _deny_invalid_input(stdout: TextIO, payload: dict[str, Any] | None = None) -> None:
+    reason = "invalid hook input; the command could not be inspected."
+    _log_block(payload or {}, "[unavailable: invalid hook input]", reason)
+    _write_deny(stdout, reason)
+
+
 def main(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> int:
     try:
         payload = json.load(stdin)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError, UnicodeError):
+        _deny_invalid_input(stdout)
         return 0
     if not isinstance(payload, dict):
+        _deny_invalid_input(stdout)
         return 0
-    command = _command_from_payload(payload)
-    reason = detect_danger(command or "")
+    try:
+        command = _command_from_payload(payload)
+    except (TypeError, ValueError):
+        _deny_invalid_input(stdout, payload)
+        return 0
+    if command is None:  # A different explicitly named tool is outside this hook's scope.
+        return 0
+    reason = detect_danger(command)
     if reason:
-        _log_block(payload, command or "", reason)
+        _log_block(payload, command, reason)
         _write_deny(stdout, reason)
     return 0
 

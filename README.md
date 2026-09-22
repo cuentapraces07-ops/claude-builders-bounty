@@ -59,7 +59,13 @@ recognizable API-key formats are redacted before logging. Ordinary commands
 (including scoped SQL deletes) remain untouched. The denial response contains
 a clear explanation for Claude and a safer, scoped alternative (for example,
 previewing files before removal, pushing a new branch, or adding a reviewed SQL
-predicate).
+predicate). Invalid hook input is denied and logged with an explicit placeholder
+instead of being silently treated as safe. The automated tests exercise real
+hook subprocesses with representative PreToolUse JSON; a live Claude Code
+session was not available during validation.
+On POSIX systems the log is restricted to owner read/write permissions, and
+the hook refuses to follow a symlink at the log path; other platforms use their
+normal filesystem ACLs.
 
 From the repository root, install it and merge its `PreToolUse` matcher into
 your existing Claude settings with one command:

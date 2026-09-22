@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -138,6 +139,31 @@ class HookInvocationTests(unittest.TestCase):
             self.assertEqual(record["project_path"], "/workspace/example")
             self.assertIn("timestamp", record)
 
+    def test_invalid_json_is_denied_without_echoing_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with mock.patch.dict("os.environ", {"CLAUDE_HOOKS_DIR": directory}, clear=False):
+                self.assertEqual(main(io.StringIO('{"command":"secret'), output), 0)
+            decision = json.loads(output.getvalue())
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIn("could not be inspected", decision["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertNotIn("secret", output.getvalue())
+            record = json.loads((Path(directory) / "blocked.log").read_text(encoding="utf-8").strip())
+            self.assertEqual(record["attempted_command"], "[unavailable: invalid hook input]")
+
+    def test_malformed_bash_payload_is_denied(self) -> None:
+        for payload in (
+            {"tool_name": "Bash"},
+            {"tool_name": "Bash", "tool_input": []},
+            {"tool_name": "Bash", "tool_input": {"command": 42}},
+            {"tool_name": 7, "tool_input": {"command": "rm -rf ./build"}},
+        ):
+            with self.subTest(payload=payload):
+                output = io.StringIO()
+                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+                decision = json.loads(output.getvalue())
+                self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_pretooluse_denies_nested_substitution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
@@ -208,11 +234,38 @@ class HookInvocationTests(unittest.TestCase):
     def test_logging_failure_still_denies_the_command(self) -> None:
         output = io.StringIO()
         payload = {"tool_name": "Bash", "tool_input": {"command": "DROP TABLE accounts"}}
-        with mock.patch.object(Path, "open", side_effect=OSError("disk full")):
+        with mock.patch("hooks.destructive_command_guard.os.open", side_effect=OSError("disk full")):
             self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
         decision = json.loads(output.getvalue())
         self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("DROP TABLE", decision["hookSpecificOutput"]["permissionDecisionReason"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file permissions are not available")
+    def test_audit_file_permissions_are_restricted_even_when_file_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "blocked.log"
+            log_path.write_text("", encoding="utf-8")
+            os.chmod(log_path, 0o644)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"}}
+            output = io.StringIO()
+            with mock.patch.dict("os.environ", {"CLAUDE_HOOK_LOG": str(log_path)}, clear=False):
+                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+            self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX symlink behavior is not available")
+    def test_audit_log_does_not_follow_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "other.log"
+            target.write_text("untouched", encoding="utf-8")
+            log_path = Path(directory) / "blocked.log"
+            log_path.symlink_to(target)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"}}
+            output = io.StringIO()
+            with mock.patch.dict("os.environ", {"CLAUDE_HOOK_LOG": str(log_path)}, clear=False):
+                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+            decision = json.loads(output.getvalue())
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched")
 
     def test_non_bash_tool_is_ignored(self) -> None:
         output = io.StringIO()
@@ -261,6 +314,27 @@ class InstallerTests(unittest.TestCase):
             decision = json.loads(result.stdout)
             self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertTrue((installed.parent / "blocked.log").is_file())
+
+    def test_installed_hook_denies_invalid_input_as_pretooluse_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installed = install(home)
+            environment = os.environ.copy()
+            environment["CLAUDE_HOOKS_DIR"] = str(installed.parent)
+            result = subprocess.run(
+                [sys.executable, str(installed)],
+                input='{"tool_name":"Bash"}',
+                capture_output=True,
+                check=False,
+                env=environment,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            decision = json.loads(result.stdout)
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            record = json.loads((installed.parent / "blocked.log").read_text(encoding="utf-8").strip())
+            self.assertEqual(record["attempted_command"], "[unavailable: invalid hook input]")
 
 
 if __name__ == "__main__":
