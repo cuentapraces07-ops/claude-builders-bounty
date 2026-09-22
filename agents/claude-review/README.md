@@ -29,6 +29,15 @@ baseline also flags common destructive shell/SQL patterns such as `rm -rf`,
 explicit maintainer review.
 The baseline also flags common prompt-injection and credential-exfiltration
 phrases in PR content so they remain review data rather than instructions.
+Claude's response is parsed as a bounded JSON review: the summary must contain
+2–3 sentences, list fields must contain strings, oversized output is rejected,
+and invalid responses fall back to a deterministic three-sentence local pass.
+Untrusted titles and review prose are flattened and escaped before Markdown
+rendering so they cannot add headings, links, or raw HTML to the generated
+report.
+Claude receives at most 8,000 characters of PR body and 50,000 characters of
+diff. If either limit is exceeded, the report marks the review as partial,
+states what was omitted, and forces confidence to Low.
 
 ## Output contract
 
