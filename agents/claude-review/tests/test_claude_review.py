@@ -23,6 +23,7 @@ from claude_review import (
     heuristic_review,
     main,
     parse_pull_url,
+    post_review_comment,
     render,
 )
 
@@ -76,6 +77,55 @@ class ReviewTests(unittest.TestCase):
         ):
             self.assertEqual(main(["--pr", pr.url, "--offline"]), 0)
         self.assertEqual(output.getvalue(), render(pr, heuristic_review(pr)))
+
+    def test_cli_posts_only_after_explicit_flag(self):
+        pr = PullRequest("https://github.com/a/r/pull/61", "a", "r", 61, "CLI", "", "")
+        result = heuristic_review(pr)
+        output = io.StringIO()
+        with (
+            mock.patch("claude_review.fetch_pull", return_value=pr),
+            mock.patch("claude_review.review", return_value=result),
+            mock.patch("claude_review.post_review_comment", return_value="https://github.com/a/r/pull/61#issuecomment-1") as post,
+            mock.patch("claude_review.sys.stdout", output),
+            mock.patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}, clear=True),
+        ):
+            self.assertEqual(main(["--pr", pr.url, "--offline"]), 0)
+            post.assert_not_called()
+            self.assertEqual(main(["--pr", pr.url, "--offline", "--post"]), 0)
+        post.assert_called_once_with(pr, render(pr, result), "test-token")
+        self.assertIn("Posted review comment: https://github.com/a/r/pull/61#issuecomment-1", output.getvalue())
+
+    def test_cli_post_requires_token_before_fetching(self):
+        pr_url = "https://github.com/a/r/pull/62"
+        error = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch("claude_review.fetch_pull") as fetch,
+            mock.patch("claude_review.sys.stderr", error),
+        ):
+            self.assertEqual(main(["--pr", pr_url, "--post"]), 2)
+        fetch.assert_not_called()
+        self.assertIn("--post requires GITHUB_TOKEN or GH_TOKEN", error.getvalue())
+
+    def test_post_review_comment_uses_github_api_and_bounds_body(self):
+        pr = PullRequest("https://github.com/a/r/pull/63", "a", "r", 63, "Post", "", "")
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"html_url": "https://github.com/a/r/pull/63#issuecomment-2"}
+        ).encode()
+        with mock.patch("claude_review.urllib.request.urlopen", return_value=response) as urlopen:
+            comment_url = post_review_comment(pr, "## Summary\nSafe output\n", "test-token")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.github.com/repos/a/r/issues/63/comments")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
+        self.assertEqual(json.loads(request.data)["body"], "## Summary\nSafe output\n")
+        self.assertEqual(comment_url, "https://github.com/a/r/pull/63#issuecomment-2")
+        with mock.patch("claude_review.urllib.request.urlopen") as urlopen:
+            with self.assertRaisesRegex(ValueError, "safety limit"):
+                post_review_comment(pr, "x" * 65_001, "test-token")
+            urlopen.assert_not_called()
 
     def test_fetch_pull_falls_back_to_files_api_when_diff_endpoint_fails(self):
         metadata = json.dumps({"title": "Fallback", "body": "Public PR"}).encode()

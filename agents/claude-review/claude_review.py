@@ -21,6 +21,7 @@ from typing import Iterable
 
 
 MAX_DIFF_BYTES = 1_000_000
+MAX_GITHUB_COMMENT_BYTES = 65_000
 MAX_GITHUB_FILE_PAGES = 5
 MAX_CLAUDE_BODY_CHARS = 8_000
 MAX_CLAUDE_DIFF_CHARS = 50_000
@@ -539,8 +540,45 @@ def render(pr: PullRequest, result: Review) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def post_review_comment(pr: PullRequest, markdown: str, token: str) -> str:
+    """Post a rendered report only when the caller explicitly requests it."""
+
+    if not token or any(ord(char) < 32 or ord(char) == 127 for char in token):
+        raise ValueError("a valid GitHub token is required to post a review comment")
+    encoded = markdown.encode("utf-8")
+    if len(encoded) > MAX_GITHUB_COMMENT_BYTES:
+        raise ValueError(f"review comment exceeds the {MAX_GITHUB_COMMENT_BYTES}-byte safety limit")
+
+    url = f"https://api.github.com/repos/{pr.owner}/{pr.repo}/issues/{pr.number}/comments"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"body": markdown}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "claude-review-bounty-agent/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read(16_384).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"GitHub rejected the review comment (HTTP {exc.code})") from None
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        raise RuntimeError("GitHub review comment request failed; no response was confirmed") from None
+
+    comment_url = result.get("html_url") if isinstance(result, dict) else None
+    if not isinstance(comment_url, str) or not comment_url.startswith("https://github.com/"):
+        raise RuntimeError("GitHub returned no valid review comment URL")
+    return comment_url
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Review a GitHub pull request and print structured Markdown.")
+    parser = argparse.ArgumentParser(
+        description="Review a GitHub pull request and optionally post the structured Markdown report."
+    )
     parser.add_argument("--pr", required=True, help="HTTPS GitHub pull request URL")
     parser.add_argument("--output", "-o", help="Write Markdown to this file instead of stdout")
     parser.add_argument(
@@ -548,12 +586,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable Claude API calls and use the local review (GitHub metadata/diff are still fetched)",
     )
+    parser.add_argument(
+        "--post",
+        action="store_true",
+        help="Post the generated report as a PR conversation comment (requires GITHUB_TOKEN or GH_TOKEN)",
+    )
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        github_token = None
+        if args.post:
+            github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+            if not github_token:
+                raise ValueError("--post requires GITHUB_TOKEN or GH_TOKEN")
         pr = fetch_pull(args.pr)
         result = review(pr, None if args.offline else os.environ.get("ANTHROPIC_API_KEY"))
         output = render(pr, result)
@@ -562,6 +610,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                 handle.write(output)
         else:
             sys.stdout.write(output)
+        if args.post:
+            comment_url = post_review_comment(pr, output, github_token or "")
+            print(f"Posted review comment: {comment_url}")
     except (OSError, RuntimeError, ValueError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
