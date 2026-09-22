@@ -290,6 +290,34 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(len(settings["hooks"]["PreToolUse"]), 2)
             self.assertTrue((home / ".claude" / "hooks" / "destructive_command_guard.py").exists())
 
+    def test_installer_keeps_existing_settings_if_atomic_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            settings_path = home / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            original = b'{"custom":true}\n'
+            settings_path.write_bytes(original)
+
+            with mock.patch("hooks.install.os.replace", side_effect=OSError("replace failed")):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    install(home)
+
+            self.assertEqual(settings_path.read_bytes(), original)
+            self.assertEqual(list(settings_path.parent.glob(".settings.json.*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file permissions are not available")
+    def test_installer_preserves_existing_settings_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            settings_path = home / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings_path.write_text("{}\n", encoding="utf-8")
+            settings_path.chmod(0o640)
+
+            install(home)
+
+            self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o640)
+
     def test_installed_hook_processes_real_pretooluse_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

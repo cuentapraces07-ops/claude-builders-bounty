@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -18,14 +21,38 @@ def _hook_entry() -> dict[str, str]:
     return {"type": "command", "command": HOOK_COMMAND}
 
 
+def _write_settings_atomically(settings_path: Path, settings: dict[str, object]) -> None:
+    """Replace settings.json without risking a partially written config."""
+
+    mode = stat.S_IMODE(settings_path.stat().st_mode) if settings_path.exists() else None
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=settings_path.parent,
+            prefix=f".{settings_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(json.dumps(settings, indent=2) + "\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        if mode is not None:
+            os.chmod(temporary_path, mode)
+        os.replace(temporary_path, settings_path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def install(home: Path | None = None) -> Path:
     home = home or Path.home()
-    hooks_dir = home / ".claude" / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-    destination = hooks_dir / HOOK_NAME
-    shutil.copy2(ROOT / HOOK_NAME, destination)
-    destination.chmod(destination.stat().st_mode | 0o111)
-
     settings_path = home / ".claude" / "settings.json"
     if settings_path.exists():
         try:
@@ -52,7 +79,13 @@ def install(home: Path | None = None) -> Path:
             break
     else:
         pre_tool_use.append({"matcher": "Bash", "hooks": [_hook_entry()]})
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+
+    hooks_dir = home / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    destination = hooks_dir / HOOK_NAME
+    shutil.copy2(ROOT / HOOK_NAME, destination)
+    destination.chmod(destination.stat().st_mode | 0o111)
+    _write_settings_atomically(settings_path, settings)
     return destination
 
 
