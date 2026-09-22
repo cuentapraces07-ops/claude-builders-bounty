@@ -252,6 +252,7 @@ def _git_force_reason(segment: list[str]) -> str | None:
         token in {"--force", "--force-with-lease", "-f"}
         or token.startswith("--force-with-lease=")
         or token.startswith("--force=")
+        or token.startswith("+")
         for token in tokens[push_index + 1 :]
     ):
         return "a forced git push can rewrite shared history."

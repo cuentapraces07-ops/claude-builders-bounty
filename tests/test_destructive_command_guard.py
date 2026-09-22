@@ -26,6 +26,9 @@ class GuardDetectionTests(unittest.TestCase):
         self.assertIsNotNone(detect_danger("git -C repo push origin main --force"))
         self.assertIsNotNone(detect_danger("git push --force-with-lease origin main"))
         self.assertIsNotNone(detect_danger("git push --force-with-lease=main origin main"))
+        self.assertIsNotNone(detect_danger("git push origin +HEAD:main"))
+        self.assertIsNotNone(detect_danger("git -C repo push origin +HEAD:main"))
+        self.assertIsNone(detect_danger("git push origin HEAD:main"))
 
     def test_blocks_dangerous_commands_inside_shell_wrappers(self) -> None:
         self.assertIsNotNone(detect_danger("bash -lc 'rm -rf ./build'"))
