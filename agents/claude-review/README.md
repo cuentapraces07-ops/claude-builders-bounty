@@ -58,9 +58,10 @@ Run the standard-library unit tests from the repository root:
 python -m unittest discover -s agents/claude-review/tests -v
 ```
 
-Two real public pull requests are included in `samples/`; they were fetched
-without credentials and rendered with `--offline` so the sample output is
-reproducible without an API key.
+Reproducible reports for two real public pull requests, #4408 and #4409, are
+included in `samples/`. They were fetched from GitHub without credentials and
+rendered with `--offline`, so they require no Anthropic API key. `--offline`
+still needs network access to GitHub; neither target repository was executed.
 
 The original implementation used `claude-sonnet-4-20250514`, which Anthropic
 retired on June 15, 2026. This implementation uses Anthropic's documented

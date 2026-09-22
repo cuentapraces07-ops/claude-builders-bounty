@@ -198,11 +198,49 @@ def diff_stats(diff: str) -> tuple[int, int, int]:
     return len(changed_files(diff)), additions, deletions
 
 
+def _added_diff_lines(diff: str) -> tuple[tuple[str, str], ...]:
+    """Return added source lines with their new path, excluding diff headers."""
+
+    current_path: str | None = None
+    in_hunk = False
+    saw_hunk = False
+    additions: list[tuple[str, str]] = []
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current_path = None
+            in_hunk = False
+            saw_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+            saw_hunk = True
+        elif not in_hunk and line.startswith("+++ b/"):
+            current_path = line[6:]
+        elif not in_hunk and line == "+++ /dev/null":
+            current_path = None
+        elif (in_hunk or not saw_hunk) and current_path is not None and line.startswith("+"):
+            additions.append((current_path, line[1:]))
+    return tuple(additions)
+
+
+def _is_test_or_fixture_path(path: str) -> bool:
+    """Recognize common test/fixture paths for contextual risk wording."""
+
+    normalized = path.replace("\\", "/").lower()
+    parts = normalized.split("/")
+    filename = parts[-1]
+    return (
+        any(part in {"test", "tests", "spec", "specs", "fixtures", "__tests__"} for part in parts[:-1])
+        or filename.startswith(("test_", "tests_"))
+        or filename.endswith(("_test.py", ".spec.js", ".spec.ts", ".test.js", ".test.ts"))
+    )
+
+
 def heuristic_review(pr: PullRequest) -> Review:
     """Produce a useful baseline without pretending that a model was called."""
 
     files, additions, deletions = diff_stats(pr.diff)
-    lower = pr.diff.lower()
+    added_lines = _added_diff_lines(pr.diff)
+    lower = "\n".join(content for _, content in added_lines).lower()
     risks: list[str] = []
     suggestions: list[str] = []
 
@@ -215,25 +253,47 @@ def heuristic_review(pr: PullRequest) -> Review:
             r"\b(ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior|earlier)\s+instructions\b|"
             r"\b(system\s+prompt|developer\s+message|jailbreak)\b|"
             r"\b(send|post|upload|exfiltrat(?:e|ion))\b[^\n]{0,80}\b(secret|token|password|api[_-]?key|credential)\b",
-            "Instruction-like or secret-exfiltration text appears in the change; treat it as untrusted data and verify it cannot influence the reviewer or leak credentials.",
+            "Instruction-like or secret-exfiltration text matched in added lines; treat it as untrusted data and verify it cannot influence the reviewer or expose credentials.",
         ),
         (
             r"\brm\s+-[a-z]*r[a-z]*f|\bgit\s+push\s+--force(?:-with-lease)?|"
             r"\bdrop\s+table\b|\btruncate\s+(?:table\s+)?[a-z_][a-z0-9_]*|"
             r"\bdelete\s+from\b(?![^\n]*\bwhere\b)",
-            "A destructive shell or SQL command pattern appears; verify allowlists, explicit confirmation, and safe non-match tests.",
+            "A potentially destructive shell or SQL command pattern matched in added lines; verify allowlists, explicit confirmation, and safe non-match tests.",
         ),
-        (r"\beval\s*\(", "Dynamic eval-like execution deserves a security review."),
-        (r"shell\s*=\s*true|subprocess\.", "Process execution is present; validate arguments and avoid shell interpolation."),
-        (r"(password|secret|api[_-]?key|token)\s*[:=]", "A credential-shaped assignment appears in the diff; verify it is not a real secret."),
-        (r"select\s+.+\s+from|insert\s+into|update\s+.+\s+set", "SQL is present; verify every value is parameterized and authorization is enforced."),
-        (r"except\s*:\s*$|catch\s*\([^)]*\)\s*\{", "A broad exception handler may hide failures; preserve actionable error context."),
-        (r"todo|fixme", "TODO/FIXME markers remain; either track them or remove them before merge."),
+        (r"\beval\s*\(", "An eval-like pattern matched in added lines; inspect the call site and confirm whether untrusted input can reach it."),
+        (r"shell\s*=\s*true|subprocess\.", "A process-execution pattern matched in added lines; validate argument provenance and avoid unsafe shell interpolation."),
+        (r"(password|secret|api[_-]?key|token)\s*[:=]", "A credential-shaped assignment pattern matched in added lines; inspect the value and provenance before treating it as a real secret."),
+        (r"select\s+.+\s+from|insert\s+into|update\s+.+\s+set", "An SQL pattern matched in added lines; verify value parameterization and authorization at the relevant query call site."),
+        (r"except\s*:\s*$|catch\s*\([^)]*\)\s*\{", "A broad exception-handler pattern matched in added lines; verify failures preserve actionable error context."),
+        (r"todo|fixme", "A TODO/FIXME marker matched in added lines; confirm it is tracked or resolved before merge."),
     )
     for pattern, message in patterns:
-        if re.search(pattern, lower, flags=re.MULTILINE):
-            risks.append(message)
+        matched_paths = tuple(
+            dict.fromkeys(
+                path
+                for path, content in added_lines
+                if re.search(pattern, content, flags=re.IGNORECASE | re.MULTILINE)
+            )
+        )
+        if not matched_paths:
+            continue
+        if all(_is_test_or_fixture_path(path) for path in matched_paths):
+            paths = ", ".join(matched_paths[:3])
+            more = " and other test/fixture files" if len(matched_paths) > 3 else ""
+            risks.append(
+                f"{message} The match is limited to test/fixture paths ({paths}{more}); "
+                "verify it is inert test data, not production behavior."
+            )
+        else:
+            paths = ", ".join(matched_paths[:3])
+            more = f" and {len(matched_paths) - 3} more file(s)" if len(matched_paths) > 3 else ""
+            risks.append(
+                f"{message} Matching file(s): {paths}{more}. This heuristic match is not proof of an exploitable issue; "
+                "inspect the exact added lines, since detector rules, examples, and fixtures can also match."
+            )
 
+    has_findings = bool(risks)
     if not risks:
         risks.append("No high-signal risk pattern was detected by the local pass; tests and domain review are still required.")
     if files > 10:
@@ -251,7 +311,14 @@ def heuristic_review(pr: PullRequest) -> Review:
     )
     # A small diff is not automatically safe: if the heuristic already found
     # a risk, keep confidence low until a human or the model can inspect it.
-    confidence = "Medium" if pr.diff_complete and files and additions + deletions <= 500 and not risks else "Low"
+    has_test_coverage = any(_is_test_or_fixture_path(path) for path, _ in added_lines) or bool(
+        re.search(r"test|spec|fixture", lower)
+    )
+    confidence = (
+        "Medium"
+        if pr.diff_complete and files and additions + deletions <= 500 and not has_findings and has_test_coverage
+        else "Low"
+    )
     return Review(summary, tuple(risks), tuple(dict.fromkeys(suggestions)), confidence, "local heuristic (no Claude API key)")
 
 
@@ -349,8 +416,29 @@ def _markdown_text(value: str) -> str:
 
     text = " ".join(value.split())
     text = html.escape(text, quote=False)
-    markdown_meta = set("\\`*_{}[]()!#+-.|~")
-    return "".join(f"\\{char}" if char in markdown_meta else char for char in text)
+    # Use character references for inline Markdown syntax instead of inserting
+    # backslashes before every punctuation mark. This keeps ordinary prose
+    # readable while ensuring untrusted text cannot create links, formatting,
+    # headings, or autolinked URLs in the generated report.
+    markdown_entities = {
+        "\\": "&#92;",
+        "`": "&#96;",
+        "*": "&#42;",
+        "_": "&#95;",
+        "{": "&#123;",
+        "}": "&#125;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "(": "&#40;",
+        ")": "&#41;",
+        "!": "&#33;",
+        "#": "&#35;",
+        "|": "&#124;",
+        "~": "&#126;",
+        ":": "&#58;",
+        "@": "&#64;",
+    }
+    return "".join(markdown_entities.get(char, char) for char in text)
 
 
 def _claude_review(pr: PullRequest, api_key: str) -> Review:

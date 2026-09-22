@@ -144,6 +144,61 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(any("destructive" in risk.lower() for risk in result.risks))
         self.assertEqual(result.confidence, "Low")
 
+    def test_risk_matches_in_test_fixtures_are_contextualized(self):
+        diff = """diff --git a/tests/test_review.py b/tests/test_review.py
+--- a/tests/test_review.py
++++ b/tests/test_review.py
+@@ -0,0 +1,2 @@
++sample = 'API_KEY="sk-live-example"'
+++ b/not-a-new-file.py
++example = 'eval("2 + 2")'
+"""
+        pr = PullRequest("https://github.com/a/r/pull/12", "a", "r", 12, "Tests", "", diff)
+        result = heuristic_review(pr)
+        self.assertTrue(any("test/fixture paths" in risk for risk in result.risks))
+        self.assertTrue(any("eval-like" in risk for risk in result.risks))
+        self.assertTrue(any("credential-shaped" in risk for risk in result.risks))
+
+    def test_removed_risky_lines_do_not_count_as_new_risks(self):
+        diff = """diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1 +1 @@
+-eval(user_input)
++return safe_value
+"""
+        pr = PullRequest("https://github.com/a/r/pull/13", "a", "r", 13, "Fix", "", diff)
+        result = heuristic_review(pr)
+        self.assertFalse(any("eval-like" in risk for risk in result.risks))
+
+    def test_detector_rule_matches_are_cautious_and_include_paths(self):
+        diff = r"""diff --git a/src/reviewer.py b/src/reviewer.py
+--- a/src/reviewer.py
++++ b/src/reviewer.py
+@@ -1,0 +1,2 @@
++EVAL_RULE_EXAMPLE = 'eval(user_input)'
++CREDENTIAL_RULE_EXAMPLE = 'API_KEY="example-only"'
+"""
+        pr = PullRequest("https://github.com/a/r/pull/14", "a", "r", 14, "Add detector rules", "", diff)
+        result = heuristic_review(pr)
+        self.assertTrue(any("eval-like" in risk for risk in result.risks))
+        self.assertTrue(any("credential-shaped" in risk for risk in result.risks))
+        self.assertTrue(all("This heuristic match is not proof" in risk for risk in result.risks))
+        self.assertTrue(all("src/reviewer.py" in risk for risk in result.risks))
+
+    def test_complete_small_change_with_test_file_gets_medium_local_confidence(self):
+        diff = """diff --git a/tests/test_safe_change.py b/tests/test_safe_change.py
+--- /dev/null
++++ b/tests/test_safe_change.py
+@@ -0,0 +1,2 @@
++def test_safe_change():
++    assert 1 + 1 == 2
+"""
+        pr = PullRequest("https://github.com/a/r/pull/15", "a", "r", 15, "Add safe test", "", diff)
+        result = heuristic_review(pr)
+        self.assertEqual(result.confidence, "Medium")
+        self.assertIn("No high-signal risk pattern", result.risks[0])
+
     def test_prompt_injection_and_exfiltration_text_are_flagged(self):
         diff = """diff --git a/README.md b/README.md
 --- a/README.md
@@ -291,6 +346,24 @@ class ReviewTests(unittest.TestCase):
         self.assertNotIn("<script>", output)
         self.assertNotIn("<img", output)
         self.assertNotIn("[click]", output)
+
+    def test_markdown_sanitizing_preserves_normal_punctuation_and_disables_autolinks(self):
+        pr = PullRequest(
+            "https://github.com/a/r/pull/11",
+            "a",
+            "r",
+            11,
+            "fix: keep alpha-beta readable (v1.2.3) https://evil.test [link](javascript:alert(1))",
+            "",
+            "",
+        )
+        output = render(pr, heuristic_review(pr))
+        self.assertIn("fix&#58; keep alpha-beta readable", output)
+        self.assertIn("v1.2.3", output)
+        self.assertIn("https&#58;//evil.test", output)
+        self.assertNotIn("https://evil.test", output)
+        self.assertNotIn("[link]", output)
+        self.assertNotIn("javascript:", output)
 
 
 if __name__ == "__main__":
