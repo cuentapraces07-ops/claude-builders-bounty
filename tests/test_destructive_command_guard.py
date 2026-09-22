@@ -33,6 +33,19 @@ class GuardDetectionTests(unittest.TestCase):
         self.assertIsNotNone(detect_danger("sh -c 'git push --force origin main'"))
         self.assertIsNotNone(detect_danger("zsh -c 'DELETE FROM accounts'"))
 
+    def test_blocks_commands_after_common_command_wrappers(self) -> None:
+        for command in (
+            "command rm -rf ./build",
+            "command -- rm -rf ./build",
+            "sudo -u root rm -rf /tmp/build",
+            "sudo --user=root -- git push --force origin main",
+            "env DEBUG=1 sudo -u root git push --force origin main",
+            "nohup rm -rf ./build",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+        self.assertIsNone(detect_danger("command echo 'DROP TABLE accounts'"))
+
     def test_blocks_dangerous_commands_inside_shell_substitutions(self) -> None:
         for command in (
             'echo "$(rm -rf ./build)"',
@@ -70,6 +83,16 @@ class GuardDetectionTests(unittest.TestCase):
     def test_blocks_unscoped_delete_before_a_later_where_clause(self) -> None:
         command = "psql -c 'DELETE FROM accounts; SELECT * FROM audit WHERE id = 7'"
         self.assertIsNotNone(detect_danger(command))
+
+    def test_sql_comments_cannot_supply_a_fake_where_clause(self) -> None:
+        for command in (
+            'mysql -e "DELETE FROM users /* WHERE id = 1 */"',
+            'sqlite3 app.db "DELETE FROM users -- WHERE id = 1"',
+            'mysql --database=app -e "DELETE FROM users # WHERE id = 1"',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+        self.assertIsNone(detect_danger('mysql -e "DELETE FROM users WHERE id = 1"'))
 
     def test_allows_normal_commands_and_literal_output(self) -> None:
         for command in (

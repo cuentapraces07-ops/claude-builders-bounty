@@ -34,6 +34,10 @@ _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
 _SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
 _WHERE_RE = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_SQL_COMMENT_RE = re.compile(
+    r"/\*.*?\*/|--[^\r\n]*(?:\r?\n|$)|\#[^\r\n]*(?:\r?\n|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 _LOG_VALUE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|,]+)'''
 _SECRET_NAME = (
     r"[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[-_]?key|"
@@ -112,19 +116,74 @@ def _is_assignment(token: str) -> bool:
 
 
 def _executable_index(segment: list[str]) -> int:
-    """Find the executable after common env/sudo prefixes."""
+    """Find the executable after common environment and command wrappers."""
 
     index = 0
-    while index < len(segment) and _is_assignment(segment[index]):
-        index += 1
-    if index < len(segment) and segment[index] == "env":
-        index += 1
-        while index < len(segment) and (_is_assignment(segment[index]) or segment[index] == "-i"):
+    sudo_options_with_values = {
+        "-a", "-C", "--close-from", "-D", "--chdir", "-g",
+        "--group", "-h", "--host", "-p", "--prompt", "-R", "--chroot",
+        "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U",
+        "--other-user", "-u", "--user",
+    }
+    env_options_with_values = {"-C", "--chdir", "-u", "--unset"}
+
+    while index < len(segment):
+        while index < len(segment) and _is_assignment(segment[index]):
             index += 1
-    if index < len(segment) and segment[index] == "sudo":
-        index += 1
-        while index < len(segment) and segment[index].startswith("-"):
+        if index >= len(segment):
+            return index
+
+        executable = Path(segment[index]).name.lower()
+        if executable == "env":
             index += 1
+            while index < len(segment):
+                token = segment[index]
+                if _is_assignment(token) or token in {"-i", "--ignore-environment", "-0", "--null"}:
+                    index += 1
+                elif token in env_options_with_values:
+                    index += 2
+                elif token.startswith(("--chdir=", "--unset=")) or (
+                    token.startswith("-u") and token != "-u"
+                ):
+                    index += 1
+                elif token == "--":
+                    index += 1
+                    break
+                elif token.startswith("-"):
+                    # Options such as -v and -S do not consume a separate
+                    # command operand here; -S's split command follows it.
+                    index += 1
+                else:
+                    break
+            continue
+
+        if executable == "sudo":
+            index += 1
+            while index < len(segment):
+                token = segment[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token in sudo_options_with_values:
+                    index += 2
+                elif token.startswith("--") and "=" in token:
+                    index += 1
+                elif token.startswith("-"):
+                    index += 1
+                else:
+                    break
+            continue
+
+        if executable in {"command", "builtin", "nohup"}:
+            index += 1
+            if index < len(segment) and segment[index] == "--":
+                index += 1
+            elif executable == "command":
+                while index < len(segment) and segment[index] in {"-p", "-v", "-V"}:
+                    index += 1
+            continue
+
+        return index
     return index
 
 
@@ -196,6 +255,7 @@ def _sql_reason(segment: list[str]) -> str | None:
         return "TRUNCATE is destructive and is blocked by this hook."
     for delete_match in _SQL_DELETE_RE.finditer(text):
         statement_tail = text[delete_match.end() :].split(";", 1)[0]
+        statement_tail = _SQL_COMMENT_RE.sub(" ", statement_tail)
         if not _WHERE_RE.search(statement_tail):
             return "DELETE FROM without a WHERE clause can remove every row."
     return None
