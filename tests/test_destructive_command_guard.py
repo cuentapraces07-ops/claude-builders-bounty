@@ -97,6 +97,20 @@ class GuardDetectionTests(unittest.TestCase):
                 self.assertIsNotNone(detect_danger(command))
         self.assertIsNone(detect_danger('mysql -e "DELETE FROM users WHERE id = 1"'))
 
+    def test_sql_strings_and_subqueries_cannot_supply_a_fake_where_clause(self) -> None:
+        for command in (
+            'psql -c "DELETE FROM accounts RETURNING \'WHERE\'"',
+            'psql -c "DELETE FROM accounts USING (SELECT id FROM archive WHERE expired) a"',
+            'psql -c "DELETE FROM accounts RETURNING (SELECT id FROM archive WHERE expired)"',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+        self.assertIsNone(
+            detect_danger(
+                'psql -c "DELETE FROM accounts WHERE id IN (SELECT id FROM archive)"'
+            )
+        )
+
     def test_allows_normal_commands_and_literal_output(self) -> None:
         for command in (
             "git status",

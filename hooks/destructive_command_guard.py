@@ -33,11 +33,7 @@ _MAX_SHELL_NESTING = 32
 _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
 _SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
-_WHERE_RE = re.compile(r"\bWHERE\b", re.IGNORECASE)
-_SQL_COMMENT_RE = re.compile(
-    r"/\*.*?\*/|--[^\r\n]*(?:\r?\n|$)|\#[^\r\n]*(?:\r?\n|$)",
-    re.IGNORECASE | re.DOTALL,
-)
+_SQL_DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 _LOG_VALUE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|,]+)'''
 _SECRET_NAME = (
     r"[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[-_]?key|"
@@ -262,6 +258,65 @@ def _git_force_reason(segment: list[str]) -> str | None:
     return None
 
 
+def _has_top_level_sql_where(statement_tail: str) -> bool:
+    """Find a WHERE token outside SQL strings, comments, and subqueries."""
+
+    index = 0
+    depth = 0
+    while index < len(statement_tail):
+        if statement_tail.startswith("/*", index):
+            end = statement_tail.find("*/", index + 2)
+            index = len(statement_tail) if end < 0 else end + 2
+            continue
+        if statement_tail.startswith("--", index) or statement_tail[index] == "#":
+            newline = statement_tail.find("\n", index + 1)
+            index = len(statement_tail) if newline < 0 else newline + 1
+            continue
+
+        char = statement_tail[index]
+        if char == "$":
+            delimiter = _SQL_DOLLAR_QUOTE_RE.match(statement_tail, index)
+            if delimiter:
+                end = statement_tail.find(delimiter.group(), delimiter.end())
+                index = len(statement_tail) if end < 0 else end + len(delimiter.group())
+                continue
+        if char in {"'", '"', "`", "["}:
+            closing = "]" if char == "[" else char
+            index += 1
+            while index < len(statement_tail):
+                if statement_tail[index] == "\\" and index + 1 < len(statement_tail):
+                    index += 2
+                    continue
+                if statement_tail[index] == closing:
+                    if index + 1 < len(statement_tail) and statement_tail[index + 1] == closing:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char == "(":
+            depth += 1
+            index += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if depth == 0 and (char.isalpha() or char == "_"):
+            end = index + 1
+            while end < len(statement_tail) and (
+                statement_tail[end].isalnum() or statement_tail[end] in "_$"
+            ):
+                end += 1
+            if statement_tail[index:end].upper() == "WHERE":
+                return True
+            index = end
+            continue
+        index += 1
+    return False
+
+
 def _sql_reason(segment: list[str]) -> str | None:
     """Detect destructive SQL while allowing ordinary echo/printing commands."""
 
@@ -289,8 +344,7 @@ def _sql_reason(segment: list[str]) -> str | None:
         return "TRUNCATE is destructive and is blocked by this hook."
     for delete_match in _SQL_DELETE_RE.finditer(text):
         statement_tail = text[delete_match.end() :].split(";", 1)[0]
-        statement_tail = _SQL_COMMENT_RE.sub(" ", statement_tail)
-        if not _WHERE_RE.search(statement_tail):
+        if not _has_top_level_sql_where(statement_tail):
             return "DELETE FROM without a WHERE clause can remove every row."
     return None
 

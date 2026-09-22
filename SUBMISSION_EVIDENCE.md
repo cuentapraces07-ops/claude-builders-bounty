@@ -29,12 +29,16 @@ Run from the repository root:
 
 ```text
 python -m unittest discover -s tests -v
+python -m pytest -q
 python -m compileall -q hooks tests
 ```
 
-On 2026-09-22, the unit suite passed **23 tests**; compileall completed without
-errors. Tests use temporary settings and logs and do not modify the user's
-Claude Code configuration.
+On 2026-09-22, unittest discovery ran **31 test methods** (28 passed, 3
+platform-specific tests skipped); pytest reported **28 passed, 3 skipped, and
+43 subtests passed**. Compileall and `git diff --check` completed without
+errors. The tests use temporary settings and logs and do not modify the user's
+Claude Code configuration. The skipped checks require POSIX permission and
+symlink semantics and still need a POSIX run.
 
 ## Scope and limitation
 
