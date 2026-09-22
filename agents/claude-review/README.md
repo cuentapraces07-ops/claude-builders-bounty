@@ -70,6 +70,21 @@ the explicit `--post` flag and a GitHub token; it creates a top-level PR
 conversation comment, not an inline review. It never changes source files,
 branches, or merge state.
 
+## Claude Code sub-agent
+
+The repository includes an auto-discovered, read-only sub-agent at
+`.claude/agents/pr-reviewer.md`. It accepts a single public GitHub PR URL and
+fetches only that PR's `.diff` using `WebFetch`; the fetched patch is treated as
+untrusted input. Its tool allowlist contains no shell, MCP, or GitHub write
+tool, and `permissionMode: plan` keeps it read-only. It returns the same
+four-section report, but does not run the CLI, verify CI, or publish comments.
+
+For a deterministic local review with the bundled CLI, use
+`python bin/claude-review --pr <url> --offline`. To publish a public comment,
+review the generated report first, then explicitly opt in with `--post` and a
+GitHub token that can write PR comments; this action is separate from the
+read-only sub-agent.
+
 ## Tests
 
 Run the standard-library unit tests from the repository root:

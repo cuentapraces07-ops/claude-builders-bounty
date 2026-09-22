@@ -229,6 +229,44 @@ def _added_diff_lines(diff: str) -> tuple[tuple[str, str], ...]:
     return tuple(additions)
 
 
+def _added_diff_locations(diff: str) -> tuple[tuple[str, int, str], ...]:
+    """Return added source lines with their new-file line numbers."""
+
+    current_path: str | None = None
+    in_hunk = False
+    new_line: int | None = None
+    locations: list[tuple[str, int, str]] = []
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current_path = None
+            in_hunk = False
+            new_line = None
+        elif line.startswith("@@"):
+            match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            in_hunk = True
+            new_line = int(match.group(1)) if match else None
+        elif not in_hunk and line.startswith("+++ b/"):
+            current_path = line[6:]
+        elif in_hunk and current_path is not None:
+            if line.startswith("+"):
+                if new_line is not None:
+                    locations.append((current_path, new_line, line[1:]))
+                    new_line += 1
+            elif line.startswith(" ") and new_line is not None:
+                new_line += 1
+            # Removed lines and the '\\ No newline' marker do not consume
+            # a line number in the new file.
+    return tuple(locations)
+
+
+def _format_match_locations(locations: Iterable[tuple[str, int]]) -> str:
+    refs = tuple(dict.fromkeys(f"{path}:{line}" for path, line in locations))
+    shown = ", ".join(refs[:5])
+    if len(refs) > 5:
+        shown += f", and {len(refs) - 5} more"
+    return shown
+
+
 def _diff_hunk_lines(diff: str) -> tuple[tuple[str, str], ...]:
     """Return added and unchanged context lines from changed-file hunks."""
 
@@ -266,6 +304,7 @@ def heuristic_review(pr: PullRequest) -> Review:
 
     files, additions, deletions = diff_stats(pr.diff)
     added_lines = _added_diff_lines(pr.diff)
+    added_locations = _added_diff_locations(pr.diff)
     lower = "\n".join(content for _, content in added_lines).lower()
     risks: list[str] = []
     suggestions: list[str] = []
@@ -304,19 +343,29 @@ def heuristic_review(pr: PullRequest) -> Review:
         )
         if not matched_paths:
             continue
+        matched_locations = tuple(
+            (path, line_number)
+            for path, line_number, content in added_locations
+            if re.search(pattern, content, flags=re.IGNORECASE | re.MULTILINE)
+        )
+        location_note = (
+            f" Matching added lines: {_format_match_locations(matched_locations)}."
+            if matched_locations
+            else ""
+        )
         if all(_is_test_or_fixture_path(path) for path in matched_paths):
             paths = ", ".join(matched_paths[:3])
             more = " and other test/fixture files" if len(matched_paths) > 3 else ""
             risks.append(
                 f"{message} The match is limited to test/fixture paths ({paths}{more}); "
-                "verify it is inert test data, not production behavior."
+                f"verify it is inert test data, not production behavior.{location_note}"
             )
         else:
             paths = ", ".join(matched_paths[:3])
             more = f" and {len(matched_paths) - 3} more file(s)" if len(matched_paths) > 3 else ""
             risks.append(
                 f"{message} Matching file(s): {paths}{more}. This heuristic match is not proof of an exploitable issue; "
-                "inspect the exact added lines, since detector rules, examples, and fixtures can also match."
+                f"inspect the exact added lines, since detector rules, examples, and fixtures can also match.{location_note}"
             )
 
     workflow_lines = tuple(

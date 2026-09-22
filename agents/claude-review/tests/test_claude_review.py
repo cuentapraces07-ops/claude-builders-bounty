@@ -17,6 +17,7 @@ from claude_review import (
     _claude_review,
     _parse_claude_response,
     _summary_sentence_count,
+    _added_diff_locations,
     changed_files,
     diff_stats,
     fetch_pull,
@@ -29,6 +30,20 @@ from claude_review import (
 
 
 class ReviewTests(unittest.TestCase):
+    def test_claude_code_subagent_is_discoverable_and_tool_restricted(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        agent_file = repo_root / ".claude" / "agents" / "pr-reviewer.md"
+        text = agent_file.read_text(encoding="utf-8")
+        frontmatter = text.split("---", 2)[1]
+        self.assertIn("name: pr-reviewer", text)
+        self.assertIn("tools: WebFetch", frontmatter)
+        self.assertIn("permissionMode: plan", frontmatter)
+        self.assertNotIn("Bash", frontmatter)
+        self.assertIn(".diff", text)
+        self.assertIn("untrusted", text)
+        self.assertIn("must never post comments", text)
+        self.assertNotIn("python bin/claude-review", text)
+
     def test_documented_repository_entrypoint_is_executable(self):
         repo_root = Path(__file__).resolve().parents[3]
         entrypoint = repo_root / "bin" / "claude-review"
@@ -331,6 +346,27 @@ new file mode 100644
 """
         self.assertEqual(changed_files(diff), ("removed.py",))
         self.assertEqual(diff_stats(diff), (1, 0, 1))
+
+    def test_added_diff_locations_track_new_side_after_context_and_deletions(self):
+        diff = """diff --git a/src/check.py b/src/check.py
+--- a/src/check.py
++++ b/src/check.py
+@@ -6,4 +8,5 @@
+ keep()
+-eval(old_value)
++eval(user_input)
++safe()
+ keep_again()
+"""
+        self.assertEqual(
+            _added_diff_locations(diff),
+            (("src/check.py", 9, "eval(user_input)"), ("src/check.py", 10, "safe()")),
+        )
+        pr = PullRequest("https://github.com/a/r/pull/64", "a", "r", 64, "Line anchors", "", diff)
+        result = heuristic_review(pr)
+        eval_risk = next(risk for risk in result.risks if "eval-like" in risk)
+        self.assertIn("Matching added lines: src/check.py:9", eval_risk)
+        self.assertNotIn("src/check.py:10", eval_risk)
 
     def test_safe_review_still_has_actionable_suggestion(self):
         pr = PullRequest("https://github.com/a/r/pull/2", "a", "r", 2, "Docs", "", "")
