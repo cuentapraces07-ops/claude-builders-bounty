@@ -10,17 +10,24 @@ a claim that Claude reviewed the PR.
 
 ## Setup and use
 
-1. Copy this directory into a project with Python 3.10+.
-2. From the repository root, run the included executable:
-   `./bin/claude-review --pr https://github.com/owner/repo/pull/123`.
-   On Windows, invoke the same entry point with
-   `python bin/claude-review --pr https://github.com/owner/repo/pull/123`.
-3. Optionally set `ANTHROPIC_API_KEY`; add `--output review.md` to save the
-   report, then inspect it before merging.
-4. To publish the generated report as a top-level PR conversation comment,
-   pass `--post` and provide `GITHUB_TOKEN` (or `GH_TOKEN`) with repository
-   permission to write issue/PR comments. Posting is off by default; each use
-   of `--post` creates a public comment and may notify subscribers.
+The CLI requires Python 3.10+ and has no third-party dependencies. From the
+repository root, run:
+
+```bash
+python bin/claude-review --pr https://github.com/owner/repo/pull/123
+```
+
+This command works on Windows, macOS, and Linux. If embedding the agent in a
+different project, preserve the repository layout by copying both
+`agents/claude-review/` and `bin/claude-review`; alternatively invoke the
+module directly with `python agents/claude-review/claude_review.py --pr ...`.
+
+Optionally set `ANTHROPIC_API_KEY`; add `--output review.md` to save the
+report, then inspect it before merging. To publish the generated report as a
+top-level PR conversation comment, pass `--post` and provide `GITHUB_TOKEN`
+(or `GH_TOKEN`) with repository permission to write issue/PR comments. Posting
+is off by default; each use of `--post` creates a public comment and may notify
+subscribers.
 
 The client accepts only HTTPS `github.com` pull-request URLs, caps fetched
 diffs at 1 MB, and falls back to GitHub's paginated PR-files API if the `.diff`
