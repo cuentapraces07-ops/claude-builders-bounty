@@ -15,14 +15,14 @@ When a repository already pins a compatible patch version, keep that pin. Do not
 
 ## Non-negotiable rules
 
-1. **Server by default.** Files are React Server Components unless they require browser state, event handlers, or a browser-only API. Add `"use client"` only at the smallest interactive leaf.
-2. **Validate at the boundary.** Parse inputs before authorization, queries, or mutations. Return a typed validation error; never pass raw request data into SQL, redirects, shell commands, or HTML.
-3. **Authorize on the server.** UI hiding is not authorization. Every Server Action, Route Handler, and data repository method checks the current user and tenant before reading or mutating data.
-4. **Parameterized SQL only.** Never interpolate values into SQL. Keep migrations and queries in the data layer; route and component code calls named repository functions.
-5. **No secret leakage.** Only variables explicitly prefixed `NEXT_PUBLIC_` may reach client bundles. Do not log tokens, cookies, passwords, full webhook bodies, or personal data.
-6. **Mutations are deliberate.** Destructive operations require an explicit confirmation in the UI, a server-side authorization check, and an audit record. Prefer soft delete and reversible state transitions.
-7. **Errors are typed and useful.** Show users a safe message with a request/correlation id; log the detailed cause on the server with secrets and personal data redacted.
-8. **Tests must be hermetic.** Unit tests use an isolated temporary SQLite database and mocked network boundaries. No test depends on a developer's database, clock, filesystem layout, or network service.
+1. **Server by default.** Files are React Server Components unless they require browser state, event handlers, or a browser-only API. Add `"use client"` only at the smallest interactive leaf. **Why:** limiting the client boundary avoids shipping data access and secrets into the browser by accident.
+2. **Validate at the boundary.** Parse inputs before authorization, queries, or mutations. Return a typed validation error; never pass raw request data into SQL, redirects, shell commands, or HTML. **Why:** one validated representation prevents the same hostile value from reaching several sinks.
+3. **Authorize on the server.** UI hiding is not authorization. Every Server Action, Route Handler, and data repository method checks the current user and tenant before reading or mutating data. **Why:** a caller can bypass the UI entirely.
+4. **Parameterized SQL only.** Never interpolate values into SQL. Keep migrations and queries in the data layer; route and component code calls named repository functions. **Why:** a narrow data boundary makes injection and tenant-scope mistakes auditable.
+5. **No secret leakage.** Only variables explicitly prefixed `NEXT_PUBLIC_` may reach client bundles. Do not log tokens, cookies, passwords, full webhook bodies, or personal data. **Why:** browser bundles and logs have wider, harder-to-revoke visibility than server memory.
+6. **Mutations are deliberate.** Destructive operations require an explicit confirmation in the UI, a server-side authorization check, and an audit record. Prefer soft delete and reversible state transitions. **Why:** users and operators need a recovery path when a mutation is mistaken.
+7. **Errors are typed and useful.** Show users a safe message with a request/correlation id; log the detailed cause on the server with secrets and personal data redacted. **Why:** support can correlate a failure without leaking its internals to an attacker.
+8. **Tests must be hermetic.** Unit tests use an isolated temporary SQLite database and mocked network boundaries. No test depends on a developer's database, clock, filesystem layout, or network service. **Why:** deterministic tests make regressions reproducible in CI and on a new machine.
 
 ## Project structure
 
@@ -53,6 +53,15 @@ scripts/                  # safe, repeatable maintenance commands
 ```
 
 Keep feature code close to its route, but keep database access, authorization, and validation in `lib/` so they can be tested without rendering React.
+
+## Naming conventions
+
+- Use `kebab-case` for route folders, feature folders, file names, database migration files, and URL slugs; predictable paths make imports, links, and deploy tooling portable across case-sensitive filesystems.
+- Use `PascalCase` for React component files, exported component names, domain types, and Zod schemas (for example, `InvoiceTable.tsx`, `Invoice`, and `InvoiceInput`); a reader can distinguish a renderable/type contract from a function at a glance.
+- Use `camelCase` for functions, local values, Server Actions, and repository methods (for example, `createInvoice` and `findInvoiceById`); this matches TypeScript and Next.js conventions without inventing a second naming dialect.
+- Prefix custom React hooks with `use` and place them in `hooks/` or next to the feature that owns them; the prefix lets React tooling and reviewers recognize hook call rules.
+- Name repository methods with an explicit verb and aggregate (`findWorkspaceMember`, `listInvoicesForWorkspace`, `createInvoice`); vague `getData` helpers hide authorization and query intent.
+- Number migrations with a sortable UTC prefix and a `kebab-case` intent (for example, `20260327_120000_add-invoice-status.sql`); immutable ordering prevents different environments from applying schema changes in a different sequence.
 
 ## Package scripts
 
@@ -150,15 +159,28 @@ pnpm test:e2e --project=chromium
 
 Record the commands and their results in the PR description. If a command cannot run in a constrained environment, state the exact limitation and run the closest hermetic substitute.
 
-## What we do not do
+## What we do not do (and why)
 
-- Do not add generic rules such as “write clean code” without a concrete, checkable behavior.
-- Do not commit `.env`, database files, credentials, generated build output, or personal data.
-- Do not introduce a global client state library when URL state, server data, or a local component state is sufficient.
-- Do not silently coerce invalid input, guess an account/tenant, or select the first result when a request is ambiguous.
-- Do not use `any` to bypass a type error; model the boundary or narrow the unknown value.
-- Do not make unrelated formatting, dependency, or architecture changes in a focused PR.
-- Do not claim a test, benchmark, deployment, or payment that was not actually run, observed, or received.
+| Avoid | Reason |
+| --- | --- |
+| Generic rules such as “write clean code” without a concrete, checkable behavior | An agent cannot reliably execute an aspiration; a reviewer needs a behavior to verify. |
+| Committing `.env`, database files, credentials, generated build output, or personal data | Source control persists and replicates those values beyond their intended audience. |
+| Adding global client state when URL state, server data, or local component state is sufficient | Global state creates stale-data and authorization synchronization paths that a SaaS does not need. |
+| Silently coercing invalid input, guessing an account/tenant, or selecting the first ambiguous result | Guessing can direct a valid request to the wrong customer's data. |
+| Using `any` to bypass a type error | `any` removes the compiler signal at precisely the boundary where runtime validation is needed. |
+| No floating-point money | Binary floating-point rounding can make invoices and ledger totals disagree; store integer minor units with an ISO currency code instead. |
+| Making unrelated formatting, dependency, or architecture changes in a focused PR | A narrow diff keeps regression review and rollback feasible. |
+| Claiming a test, benchmark, deployment, or payment that was not actually run, observed, or received | Evidence must remain auditable; an unobserved claim misleads maintainers and users. |
+
+## Greenfield verification protocol
+
+Run the structural contract check after copying this file into a new Next.js + SQLite project:
+
+```bash
+python -B -m unittest discover -s tests -v
+```
+
+Then perform the behavioral smoke test with an authenticated Claude Code installation: create a new project, paste this file at its root, and request a small authenticated CRUD feature. The expected result is that Claude Code uses the declared stack, layout, names, migration rules, validation, and test gate without asking the owner to choose among those settled defaults. Record the exact prompt, Claude Code version, and observed result in the PR or project evidence. This repository does **not** claim that a live Claude Code session has been run merely because the structural test passes.
 
 ## Definition of done
 
