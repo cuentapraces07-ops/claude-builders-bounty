@@ -47,7 +47,8 @@ You're in the right place.
 
 This repository includes `hooks/destructive_command_guard.py`, a dependency-free
 Claude Code `PreToolUse` hook for the bounty in [issue #3](../../issues/3). It
-denies `rm -rf`, `git push --force`, `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
+denies `rm -rf`, forced or mirrored Git pushes (including forced refspecs set
+through `git -c remote.<name>.push=+...`), `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
 without a `WHERE` clause. It also inspects `$(...)`, backticks, and process
 substitutions for nested destructive commands, while leaving single-quoted and
 escaped examples untouched; shell nesting deeper than 32 levels is denied
@@ -74,24 +75,17 @@ your existing Claude settings with one command:
 python3 hooks/install.py
 ```
 
-The installer copies the hook to `~/.claude/hooks/` and preserves unrelated
-settings. To configure it manually instead, add this matcher to
-`~/.claude/settings.json`:
+On Windows, use the Python launcher instead:
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {"type": "command", "command": "python3 ~/.claude/hooks/destructive_command_guard.py"}
-        ]
-      }
-    ]
-  }
-}
+```powershell
+py -3 hooks/install.py
 ```
+
+The installer copies the hook to `~/.claude/hooks/`, preserves unrelated
+settings, and writes a `Bash` matcher using the Python interpreter that ran
+the installer. That makes the generated command invocable on Windows as well
+as POSIX shells. If that Python installation moves, rerun the same one-command
+installer to refresh the matcher.
 
 ---
 

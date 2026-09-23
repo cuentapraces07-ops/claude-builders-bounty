@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from hooks.destructive_command_guard import _redact_command_for_log, detect_danger, main
-from hooks.install import install
+from hooks.install import hook_command, install
 
 
 class GuardDetectionTests(unittest.TestCase):
@@ -28,7 +28,16 @@ class GuardDetectionTests(unittest.TestCase):
         self.assertIsNotNone(detect_danger("git push --force-with-lease=main origin main"))
         self.assertIsNotNone(detect_danger("git push origin +HEAD:main"))
         self.assertIsNotNone(detect_danger("git -C repo push origin +HEAD:main"))
+        self.assertIsNotNone(detect_danger("git push --mirror origin"))
+        self.assertIsNotNone(detect_danger("git -c remote.origin.push=+HEAD:main push origin"))
+        self.assertIsNotNone(detect_danger("git -cremote.origin.push=+HEAD:main push origin"))
+        self.assertIsNotNone(detect_danger("git -c remote.origin.mirror=true push origin"))
+        self.assertIsNotNone(
+            detect_danger("git --config-env=remote.origin.push=GIT_PUSH_REFSPEC push origin")
+        )
         self.assertIsNone(detect_danger("git push origin HEAD:main"))
+        self.assertIsNone(detect_danger("git -c remote.origin.push=HEAD:main push origin"))
+        self.assertIsNone(detect_danger("git -c remote.origin.mirror=false push origin"))
 
     def test_blocks_dangerous_commands_inside_shell_wrappers(self) -> None:
         self.assertIsNotNone(detect_danger("bash -lc 'rm -rf ./build'"))
@@ -297,14 +306,33 @@ class InstallerTests(unittest.TestCase):
             home = Path(directory)
             settings_path = home / ".claude" / "settings.json"
             settings_path.parent.mkdir(parents=True)
+            command = hook_command(home)
             settings_path.write_text(
-                json.dumps({"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": []}]}}),
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Read",
+                                    "hooks": [{"type": "command", "command": command}],
+                                }
+                            ]
+                        }
+                    }
+                ),
                 encoding="utf-8",
             )
             install(home)
             install(home)
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(len(settings["hooks"]["PreToolUse"]), 2)
+            bash_matchers = [
+                matcher
+                for matcher in settings["hooks"]["PreToolUse"]
+                if matcher.get("matcher") == "Bash"
+            ]
+            self.assertEqual(len(bash_matchers), 1)
+            self.assertEqual(bash_matchers[0]["hooks"], [{"type": "command", "command": command}])
             self.assertTrue((home / ".claude" / "hooks" / "destructive_command_guard.py").exists())
 
     def test_installer_keeps_existing_settings_if_atomic_replace_fails(self) -> None:
@@ -359,6 +387,34 @@ class InstallerTests(unittest.TestCase):
             decision = json.loads(result.stdout)
             self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertTrue((installed.parent / "blocked.log").is_file())
+
+    def test_registered_bash_matcher_command_is_invocable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            install(home)
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            matcher = next(
+                entry
+                for entry in settings["hooks"]["PreToolUse"]
+                if entry.get("matcher") == "Bash"
+            )
+            command = matcher["hooks"][0]["command"]
+            payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"}}
+            environment = os.environ.copy()
+            environment["CLAUDE_HOOKS_DIR"] = str(home / ".claude" / "hooks")
+            result = subprocess.run(
+                command,
+                input=json.dumps(payload),
+                capture_output=True,
+                check=False,
+                env=environment,
+                shell=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            decision = json.loads(result.stdout)
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_installed_hook_denies_invalid_input_as_pretooluse_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

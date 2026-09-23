@@ -34,6 +34,9 @@ _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
 _SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
 _SQL_DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
+_GIT_REMOTE_PUSH_CONFIG_RE = re.compile(r"^remote\.[^.]+\.push$", re.IGNORECASE)
+_GIT_REMOTE_MIRROR_CONFIG_RE = re.compile(r"^remote\.[^.]+\.mirror$", re.IGNORECASE)
+_GIT_TRUE_VALUES = {"1", "on", "true", "yes"}
 _LOG_VALUE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|,]+)'''
 _SECRET_NAME = (
     r"[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[-_]?key|"
@@ -239,6 +242,57 @@ def _rm_reason(segment: list[str]) -> str | None:
     return None
 
 
+def _git_config_override_reason(tokens: list[str], push_index: int) -> str | None:
+    """Detect force-enabling Git config passed before a ``push`` subcommand.
+
+    ``git -c remote.origin.push=+HEAD:main push origin`` has no force flag
+    after ``push``, but Git uses that configured refspec when the command has
+    no explicit refspec.  Inspecting only push arguments would therefore
+    miss a history rewrite.  A config value injected with ``--config-env``
+    cannot be read safely from the hook, so reject that narrow override rather
+    than guessing whether it is safe.
+    """
+
+    position = 0
+    while position < push_index:
+        token = tokens[position]
+        config: str | None = None
+        config_from_environment = False
+        if token == "-c" and position + 1 < push_index:
+            config = tokens[position + 1]
+            position += 2
+        elif token.startswith("-c") and token != "-c":
+            config = token[2:]
+            position += 1
+        elif token == "--config-env" and position + 1 < push_index:
+            config = tokens[position + 1]
+            config_from_environment = True
+            position += 2
+        elif token.startswith("--config-env="):
+            config = token.partition("=")[2]
+            config_from_environment = True
+            position += 1
+        else:
+            position += 1
+
+        if config is None:
+            continue
+        name, separator, value = config.partition("=")
+        if not separator:
+            continue
+        if _GIT_REMOTE_PUSH_CONFIG_RE.fullmatch(name):
+            if config_from_environment:
+                return "a Git remote push configuration from the environment cannot be inspected safely."
+            if value.lstrip().startswith("+"):
+                return "a forced git push can rewrite shared history."
+        elif _GIT_REMOTE_MIRROR_CONFIG_RE.fullmatch(name):
+            if config_from_environment:
+                return "a Git remote push configuration from the environment cannot be inspected safely."
+            if value.strip().lower() in _GIT_TRUE_VALUES:
+                return "a forced git push can rewrite shared history."
+    return None
+
+
 def _git_force_reason(segment: list[str]) -> str | None:
     index = _executable_index(segment)
     if index >= len(segment) or Path(segment[index]).name != "git":
@@ -248,8 +302,12 @@ def _git_force_reason(segment: list[str]) -> str | None:
         push_index = tokens.index("push")
     except ValueError:
         return None
+    config_reason = _git_config_override_reason(tokens, push_index)
+    if config_reason:
+        return config_reason
     if any(
         token in {"--force", "--force-with-lease", "-f"}
+        or token == "--mirror"
         or token.startswith("--force-with-lease=")
         or token.startswith("--force=")
         or token.startswith("+")

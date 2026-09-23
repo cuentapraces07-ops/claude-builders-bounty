@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import stat
 import sys
 import tempfile
@@ -14,11 +15,31 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent
 HOOK_NAME = "destructive_command_guard.py"
-HOOK_COMMAND = f"python3 ~/.claude/hooks/{HOOK_NAME}"
 
 
-def _hook_entry() -> dict[str, str]:
-    return {"type": "command", "command": HOOK_COMMAND}
+def _command_part(value: str) -> str:
+    """Quote one interpreter or path operand for the host shell."""
+
+    if os.name == "nt":
+        return f'"{value}"'
+    return shlex.quote(value)
+
+
+def hook_command(home: Path) -> str:
+    """Return the executable hook command for this machine's settings file.
+
+    The legacy ``python3 ~/.claude/...`` command is convenient on POSIX, but
+    often does not resolve on Windows.  The installer is per-user and per-host,
+    so preserving the interpreter that successfully ran it is more reliable
+    than assuming a shell alias exists later.
+    """
+
+    hook_path = home / ".claude" / "hooks" / HOOK_NAME
+    return f"{_command_part(sys.executable)} {_command_part(str(hook_path))}"
+
+
+def _hook_entry(command: str) -> dict[str, str]:
+    return {"type": "command", "command": command}
 
 
 def _write_settings_atomically(settings_path: Path, settings: dict[str, object]) -> None:
@@ -54,6 +75,7 @@ def _write_settings_atomically(settings_path: Path, settings: dict[str, object])
 def install(home: Path | None = None) -> Path:
     home = home or Path.home()
     settings_path = home / ".claude" / "settings.json"
+    command = hook_command(home)
     if settings_path.exists():
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -70,15 +92,15 @@ def install(home: Path | None = None) -> Path:
     if not isinstance(pre_tool_use, list):
         raise RuntimeError("The existing PreToolUse setting is not a JSON array")
     for matcher in pre_tool_use:
-        if not isinstance(matcher, dict):
+        if not isinstance(matcher, dict) or matcher.get("matcher") != "Bash":
             continue
         nested = matcher.get("hooks", [])
         if isinstance(nested, list) and any(
-            isinstance(entry, dict) and entry.get("command") == HOOK_COMMAND for entry in nested
+            isinstance(entry, dict) and entry.get("command") == command for entry in nested
         ):
             break
     else:
-        pre_tool_use.append({"matcher": "Bash", "hooks": [_hook_entry()]})
+        pre_tool_use.append({"matcher": "Bash", "hooks": [_hook_entry(command)]})
 
     hooks_dir = home / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
