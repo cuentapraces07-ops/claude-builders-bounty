@@ -202,6 +202,28 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("--- a/src/review.py\n+++ b/src/review.py", pr.diff)
         self.assertEqual(diff_stats(pr.diff), (1, 1, 1))
 
+    def test_fetch_pull_reviews_reachable_diff_when_metadata_is_temporarily_unavailable(self):
+        diff = b"diff --git a/src/review.py b/src/review.py\n--- a/src/review.py\n+++ b/src/review.py\n@@ -1 +1 @@\n-old()\n+new()\n"
+
+        def request(url, accept):
+            if url == "https://api.github.com/repos/a/r/pulls/9":
+                raise urllib.error.HTTPError(url, 500, "Server Error", {}, None)
+            if url == "https://github.com/a/r/pull/9.diff":
+                return diff
+            self.fail(f"unexpected request: {url}")
+
+        with mock.patch("claude_review._request", side_effect=request):
+            pr = fetch_pull("https://github.com/a/r/pull/9")
+
+        result = heuristic_review(pr)
+        report = render(pr, result)
+        self.assertFalse(pr.metadata_complete)
+        self.assertTrue(pr.diff_complete)
+        self.assertEqual(pr.title, "Pull request #9 (GitHub metadata unavailable)")
+        self.assertEqual(result.confidence, "Low")
+        self.assertIn("Metadata coverage: partial", report)
+        self.assertIn("metadata could not be fetched", " ".join(result.risks))
+
     def test_missing_github_patch_is_explicit_and_forces_low_confidence(self):
         metadata = json.dumps({"title": "Partial", "body": ""}).encode()
         files = json.dumps(
@@ -391,6 +413,42 @@ new file mode 100644
 """
         self.assertEqual(changed_files(diff), ("removed.py",))
         self.assertEqual(diff_stats(diff), (1, 0, 1))
+
+    def test_diff_stats_counts_rename_only_and_binary_only_files(self):
+        rename_only = """diff --git a/old_name.py b/new_name.py
+similarity index 100%
+rename from old_name.py
+rename to new_name.py
+"""
+        binary_only = """diff --git a/assets/icon.png b/assets/icon.png
+Binary files a/assets/icon.png and b/assets/icon.png differ
+"""
+        self.assertEqual(changed_files(rename_only), ("new_name.py",))
+        self.assertEqual(diff_stats(rename_only), (1, 0, 0))
+        self.assertEqual(changed_files(binary_only), ("assets/icon.png",))
+        self.assertEqual(diff_stats(binary_only), (1, 0, 0))
+
+    def test_binary_diff_is_reported_as_partial_coverage(self):
+        metadata = json.dumps({"title": "Binary update", "body": ""}).encode()
+        diff = (
+            b"diff --git a/assets/icon.png b/assets/icon.png\n"
+            b"Binary files a/assets/icon.png and b/assets/icon.png differ\n"
+        )
+
+        def request(url, accept):
+            if url == "https://api.github.com/repos/a/r/pulls/10":
+                return metadata
+            if url == "https://github.com/a/r/pull/10.diff":
+                return diff
+            self.fail(f"unexpected request: {url}")
+
+        with mock.patch("claude_review._request", side_effect=request):
+            pr = fetch_pull("https://github.com/a/r/pull/10")
+
+        result = heuristic_review(pr)
+        self.assertFalse(pr.diff_complete)
+        self.assertEqual(result.confidence, "Low")
+        self.assertIn("omitted or truncated", " ".join(result.risks))
 
     def test_added_diff_locations_track_new_side_after_context_and_deletions(self):
         diff = """diff --git a/src/check.py b/src/check.py

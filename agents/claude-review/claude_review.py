@@ -13,6 +13,7 @@ import html
 import json
 import os
 import re
+import shlex
 import sys
 import urllib.error
 import urllib.request
@@ -64,6 +65,7 @@ class PullRequest:
     body: str
     diff: str
     diff_complete: bool = True
+    metadata_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -100,23 +102,42 @@ def parse_pull_url(url: str) -> tuple[str, str, int]:
 def fetch_pull(url: str) -> PullRequest:
     owner, repo, number = parse_pull_url(url)
     api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
-    metadata = json.loads(_request(api_url, "application/vnd.github+json").decode("utf-8"))
-    if (
-        not isinstance(metadata, dict)
-        or not isinstance(metadata.get("title"), str)
-        or not metadata["title"].strip()
+    metadata_complete = True
+    try:
+        metadata = json.loads(_request(api_url, "application/vnd.github+json").decode("utf-8"))
+        if (
+            not isinstance(metadata, dict)
+            or not isinstance(metadata.get("title"), str)
+            or not metadata["title"].strip()
+        ):
+            raise ValueError("GitHub API returned no pull-request metadata")
+        title = str(metadata["title"])
+        body = str(metadata.get("body") or "")
+    except (
+        OSError,
+        ValueError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        json.JSONDecodeError,
     ):
-        raise ValueError("GitHub API returned no pull-request metadata")
+        # A transient metadata outage should not prevent the deterministic
+        # reviewer from analyzing a reachable diff.  Do not invent a title or
+        # body: mark that part of the review as partial instead.
+        title = f"Pull request #{number} (GitHub metadata unavailable)"
+        body = ""
+        metadata_complete = False
     diff, diff_complete = fetch_pull_diff(owner, repo, number)
     return PullRequest(
         url=url.rstrip("/"),
         owner=owner,
         repo=repo,
         number=number,
-        title=str(metadata["title"]),
-        body=str(metadata.get("body") or ""),
+        title=title,
+        body=body,
         diff=diff,
         diff_complete=diff_complete,
+        metadata_complete=metadata_complete,
     )
 
 
@@ -176,7 +197,7 @@ def fetch_pull_diff(owner: str, repo: str, number: int) -> tuple[str, bool]:
     diff_url = f"https://github.com/{owner}/{repo}/pull/{number}.diff"
     try:
         diff = _request(diff_url, "text/plain").decode("utf-8", errors="replace")
-        return diff, True
+        return diff, not _has_opaque_diff_content(diff)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as diff_error:
         try:
             return _fetch_file_api_diff(owner, repo, number)
@@ -186,24 +207,43 @@ def fetch_pull_diff(owner: str, repo: str, number: int) -> tuple[str, bool]:
             ) from api_error
 
 
+def _has_opaque_diff_content(diff: str) -> bool:
+    """Return whether a textual diff omits a changed file's source content.
+
+    GitHub serves binary changes as a header followed by ``Binary files ...``
+    (or a Git binary patch).  Counting the header is still useful for scope,
+    but this reviewer cannot inspect the underlying binary bytes, so its
+    coverage must be reported as partial.
+    """
+
+    return any(
+        line.startswith("Binary files ") or line == "GIT binary patch"
+        for line in diff.splitlines()
+    )
+
+
+def _diff_header_new_path(line: str) -> str | None:
+    """Extract a changed file's new-side path from a Git diff header."""
+
+    try:
+        tokens = shlex.split(line, posix=True)
+    except ValueError:
+        return None
+    if len(tokens) != 4 or tokens[:2] != ["diff", "--git"]:
+        return None
+    path = tokens[3]
+    return path[2:] if path.startswith("b/") else path
+
+
 def changed_files(diff: str) -> tuple[str, ...]:
+    """Return changed paths, including rename-only and binary-only diffs."""
+
     files: list[str] = []
-    old_path: str | None = None
-    in_hunk = False
     for line in diff.splitlines():
         if line.startswith("diff --git "):
-            old_path = None
-            in_hunk = False
-        elif line.startswith("@@"):
-            in_hunk = True
-        elif not in_hunk and line.startswith("--- a/"):
-            old_path = line[6:]
-        elif not in_hunk and line.startswith("+++ b/"):
-            files.append(line[6:])
-            old_path = None
-        elif not in_hunk and line == "+++ /dev/null" and old_path is not None:
-            files.append(old_path)
-            old_path = None
+            path = _diff_header_new_path(line)
+            if path is not None:
+                files.append(path)
     return tuple(dict.fromkeys(files))
 
 
@@ -335,6 +375,12 @@ def heuristic_review(pr: PullRequest) -> Review:
     risks: list[str] = []
     suggestions: list[str] = []
 
+    if not pr.metadata_complete:
+        risks.append(
+            "GitHub pull-request metadata could not be fetched, so the original title and body were not reviewed."
+        )
+        suggestions.append("Fetch the PR metadata again before relying on this report for context beyond the diff.")
+
     if not pr.diff_complete:
         risks.append("GitHub omitted or truncated part of the file patches; not every changed line was reviewed.")
         suggestions.append("Inspect the complete PR diff and omitted files before relying on this report.")
@@ -444,7 +490,14 @@ def heuristic_review(pr: PullRequest) -> Review:
     )
     confidence = (
         "Medium"
-        if pr.diff_complete and files and additions + deletions <= 500 and not has_findings and has_test_coverage
+        if (
+            pr.diff_complete
+            and pr.metadata_complete
+            and files
+            and additions + deletions <= 500
+            and not has_findings
+            and has_test_coverage
+        )
         else "Low"
     )
     return Review(summary, tuple(risks), tuple(dict.fromkeys(suggestions)), confidence, "local heuristic (no Claude API key)")
@@ -583,6 +636,8 @@ def _claude_review(pr: PullRequest, api_key: str) -> Review:
         )
     if not pr.diff_complete:
         truncation_notes.append("GitHub omitted or truncated one or more changed-file patches.")
+    if not pr.metadata_complete:
+        truncation_notes.append("GitHub pull-request metadata was unavailable, so the original title and body were not reviewed.")
     truncation_notice = ""
     if truncation_notes:
         truncation_notice = (
@@ -649,6 +704,7 @@ def render(pr: PullRequest, result: Review) -> str:
         f"- URL: {pr.url}",
         f"- Scope: {files} changed file(s), +{additions}/-{deletions}",
         f"- Diff coverage: {'complete' if pr.diff_complete else 'partial; inspect omitted patches'}",
+        f"- Metadata coverage: {'complete' if pr.metadata_complete else 'partial; title and body were unavailable'}",
         f"- Engine: {result.mode}",
         "",
         "## Summary",
