@@ -17,10 +17,22 @@ repository root, run:
 python bin/claude-review --pr https://github.com/owner/repo/pull/123
 ```
 
-This command works on Windows, macOS, and Linux. If embedding the agent in a
-different project, preserve the repository layout by copying both
-`agents/claude-review/` and `bin/claude-review`; alternatively invoke the
-module directly with `python agents/claude-review/claude_review.py --pr ...`.
+This command works on Windows, macOS, and Linux. To install the exact
+`claude-review --pr ...` command in an isolated virtual environment, run:
+
+```bash
+python -m venv .venv
+# Activate .venv using your platform's normal command, then:
+python -m pip install --no-deps .
+claude-review --pr https://github.com/owner/repo/pull/123
+```
+
+The installed command has no runtime third-party dependencies. Its build
+backend is `setuptools`, which a standard `pip install` may download if it is
+not already present. If embedding the agent in a different project, preserve
+the repository layout by copying both `agents/claude-review/` and
+`bin/claude-review`; alternatively invoke the module directly with
+`python agents/claude-review/claude_review.py --pr ...`.
 
 Optionally set `ANTHROPIC_API_KEY`; add `--output review.md` to save the
 report, then inspect it before merging. To publish the generated report as a
@@ -55,7 +67,9 @@ Claude's response is parsed as a bounded JSON review: the summary must contain
 and invalid responses fall back to a deterministic three-sentence local pass.
 Untrusted titles and review prose are flattened and escaped before Markdown
 rendering so they cannot add headings, links, or raw HTML to the generated
-report.
+report. Recognizable GitHub, Anthropic, and Slack credential-shaped values are
+replaced with a visible redaction marker before rendering; the optional posting
+path applies the same redaction again at its write boundary.
 Claude receives at most 8,000 characters of PR body and 50,000 characters of
 diff. If either limit is exceeded, the report marks the review as partial,
 states what was omitted, and forces confidence to Low.

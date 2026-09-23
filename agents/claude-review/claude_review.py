@@ -38,6 +38,20 @@ GITHUB_PULL_RE = re.compile(
 )
 SUMMARY_ABBREVIATION_RE = re.compile(r"\b(?:e\.g|i\.e|mr|mrs|ms|dr|vs|etc|no|fig)\.", re.IGNORECASE)
 SUMMARY_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"')\]]*\s+(?=[A-Z])")
+# Reports can contain PR titles, bodies, diffs, or model text.  Those values are
+# untrusted and might accidentally include a credential.  This deliberately
+# targets recognizable high-entropy credential prefixes rather than ordinary
+# identifiers or environment-variable names, then gives callers a visible
+# marker instead of silently deleting review evidence.
+SECRET_LIKE_VALUE_RE = re.compile(
+    r"\b(?:"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"sk-ant-[A-Za-z0-9_-]{16,}|"
+    r"sk-[A-Za-z0-9_-]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}"
+    r")\b"
+)
 
 
 @dataclass(frozen=True)
@@ -295,7 +309,19 @@ def _is_test_or_fixture_path(path: str) -> bool:
     return (
         any(part in {"test", "tests", "spec", "specs", "fixtures", "__tests__"} for part in parts[:-1])
         or filename.startswith(("test_", "tests_"))
-        or filename.endswith(("_test.py", ".spec.js", ".spec.ts", ".test.js", ".test.ts"))
+        or filename.endswith(
+            (
+                "_test.py",
+                ".spec.js",
+                ".spec.ts",
+                ".spec.jsx",
+                ".spec.tsx",
+                ".test.js",
+                ".test.ts",
+                ".test.jsx",
+                ".test.tsx",
+            )
+        )
     )
 
 
@@ -516,7 +542,7 @@ def _parse_claude_response(data: object) -> Review:
 def _markdown_text(value: str) -> str:
     """Render untrusted titles and model prose as plain Markdown text."""
 
-    text = " ".join(value.split())
+    text = " ".join(SECRET_LIKE_VALUE_RE.sub("[REDACTED_SECRET]", value).split())
     text = html.escape(text, quote=False)
     # Use character references for inline Markdown syntax instead of inserting
     # backslashes before every punctuation mark. This keeps ordinary prose
@@ -646,6 +672,9 @@ def post_review_comment(pr: PullRequest, markdown: str, token: str) -> str:
 
     if not token or any(ord(char) < 32 or ord(char) == 127 for char in token):
         raise ValueError("a valid GitHub token is required to post a review comment")
+    # Keep the write boundary defensive even if a future caller bypasses
+    # render() and passes model or user-supplied text straight to this helper.
+    markdown = SECRET_LIKE_VALUE_RE.sub("[REDACTED_SECRET]", markdown)
     encoded = markdown.encode("utf-8")
     if len(encoded) > MAX_GITHUB_COMMENT_BYTES:
         raise ValueError(f"review comment exceeds the {MAX_GITHUB_COMMENT_BYTES}-byte safety limit")

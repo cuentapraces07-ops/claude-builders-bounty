@@ -57,6 +57,12 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("--pr", result.stdout)
         self.assertIn("--offline", result.stdout)
 
+    def test_packaging_declares_the_documented_console_script(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('claude-review = "claude_review:main"', pyproject)
+        self.assertIn('package-dir = {"" = "agents/claude-review"}', pyproject)
+
     def test_parse_pull_url(self):
         self.assertEqual(parse_pull_url("https://github.com/a-b/repo_1/pull/42"), ("a-b", "repo_1", 42))
 
@@ -83,6 +89,32 @@ class ReviewTests(unittest.TestCase):
         self.assertNotIn("post", output.lower())
         self.assertTrue(output.endswith("\n"))
         self.assertFalse(output.endswith("\n\n"))
+
+    def test_render_and_post_redact_recognizable_secret_like_values(self):
+        pr = PullRequest(
+            "https://github.com/a/r/pull/59",
+            "a",
+            "r",
+            59,
+            "Title github_pat_abcdefghijklmnopqrstuvwxyz1234567890",
+            "",
+            "",
+        )
+        review = heuristic_review(pr)
+        report = render(pr, review)
+        self.assertNotIn("github_pat_abcdefghijklmnopqrstuvwxyz1234567890", report)
+        self.assertIn("&#91;REDACTED&#95;SECRET&#93;", report)
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"html_url": "https://github.com/a/r/pull/59#issuecomment-2"}
+        ).encode()
+        raw_report = report + "\nmodel output sk-ant-abcdefghijklmnopqrstuvwx\n"
+        with mock.patch("claude_review.urllib.request.urlopen", return_value=response) as urlopen:
+            post_review_comment(pr, raw_report, "test-token")
+        posted = json.loads(urlopen.call_args.args[0].data)["body"]
+        self.assertNotIn("sk-ant-abcdefghijklmnopqrstuvwx", posted)
+        self.assertIn("[REDACTED_SECRET]", posted)
 
     def test_cli_stdout_matches_rendered_report_without_extra_blank_line(self):
         pr = PullRequest("https://github.com/a/r/pull/6", "a", "r", 6, "CLI", "", "")
@@ -322,6 +354,19 @@ new file mode 100644
         result = heuristic_review(pr)
         self.assertEqual(result.confidence, "Medium")
         self.assertIn("No high-signal risk pattern", result.risks[0])
+
+    def test_typescript_react_test_files_count_as_test_coverage(self):
+        diff = """diff --git a/src/widget.test.tsx b/src/widget.test.tsx
+--- /dev/null
++++ b/src/widget.test.tsx
+@@ -0,0 +1,2 @@
++it("renders the widget", () => expect(true).toBe(true));
++
+"""
+        pr = PullRequest("https://github.com/a/r/pull/65", "a", "r", 65, "Add React test", "", diff)
+        result = heuristic_review(pr)
+        self.assertEqual(result.confidence, "Medium")
+        self.assertNotIn("Add or update a regression test", result.suggestions)
 
     def test_prompt_injection_and_exfiltration_text_are_flagged(self):
         diff = """diff --git a/README.md b/README.md
