@@ -6,6 +6,8 @@ authenticated installation.
 """
 
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
 
 
@@ -57,6 +59,32 @@ class ClaudeTemplateContractTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertIn(value, self.text)
+
+    def test_template_copies_cleanly_into_a_blank_greenfield_project(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claude-template-greenfield-") as temp:
+            project = Path(temp) / "new-next-sqlite-saas"
+            project.mkdir()
+            copied_template = project / "CLAUDE.md"
+            shutil.copyfile(TEMPLATE, copied_template)
+
+            copied_text = copied_template.read_text(encoding="utf-8")
+            self.assertEqual(copied_text, self.text)
+            for required_default in (
+                "Next.js 15 App Router",
+                "React 19",
+                "TypeScript in strict mode",
+                "`pnpm` is the package manager",
+                "better-sqlite3",
+                "Turso/libSQL",
+                "## Database and migration rules",
+                "## Authentication, authorization, and webhooks",
+                "## Testing and review checklist",
+                "without asking the owner to choose among those settled defaults",
+            ):
+                with self.subTest(required_default=required_default):
+                    self.assertIn(required_default, copied_text)
+
+            self.assertEqual([path.name for path in project.iterdir()], ["CLAUDE.md"])
 
 
 if __name__ == "__main__":
