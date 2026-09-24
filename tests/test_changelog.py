@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 from scripts.changelog import classify, commits_since, latest_tag, main, markdown
@@ -92,6 +94,27 @@ class ChangelogTests(unittest.TestCase):
                 with self.subTest(bad_date=bad_date):
                     with self.assertRaisesRegex(ValueError, "valid YYYY-MM-DD"):
                         markdown(repo, [], None, bad_date)
+
+    def test_cli_reports_invalid_date_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run = lambda *args: subprocess.run(
+                ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+            )
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            (repo / "notes.txt").write_text("initial\n", encoding="utf-8")
+            run("add", "notes.txt")
+            run("commit", "-qm", "docs: add notes")
+
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                result = main(["--repo", str(repo), "--date", "2026-02-30", "--stdout"])
+
+        self.assertEqual(result, 2)
+        self.assertIn("changelog: date must be a valid YYYY-MM-DD value", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
 
     def test_empty_range_is_explicit_and_cli_stdout_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

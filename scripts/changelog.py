@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             output.write_text(content, encoding="utf-8", newline="\n")
             print(f"Wrote {output} (baseline: {base or 'repository root'})")
         return 0
-    except GitError as exc:
+    except (GitError, ValueError) as exc:
         print(f"changelog: {exc}", file=sys.stderr)
         return 2
 
