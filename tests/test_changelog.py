@@ -68,6 +68,33 @@ class ChangelogTests(unittest.TestCase):
             self.assertIn("### Added", output)
             self.assertIn("### Fixed", output)
 
+    def test_default_ignores_tags_not_merged_into_head(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run = lambda *args: subprocess.run(
+                ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+            )
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            (repo / "notes.txt").write_text("initial\n", encoding="utf-8")
+            run("add", "notes.txt")
+            run("commit", "-qm", "feat: add notes")
+            run("branch", "-M", "main")
+            run("tag", "v1.0.0")
+            (repo / "notes.txt").write_text("main update\n", encoding="utf-8")
+            run("commit", "-qam", "fix: update main notes")
+
+            run("checkout", "-qb", "unmerged-release")
+            (repo / "notes.txt").write_text("unmerged release\n", encoding="utf-8")
+            run("commit", "-qam", "feat: add unmerged release")
+            run("tag", "v99.0.0")
+            run("checkout", "-q", "main")
+
+            self.assertEqual(latest_tag(repo), "v1.0.0")
+            commits = commits_since(repo, latest_tag(repo))
+            self.assertEqual([commit.subject for commit in commits], ["fix: update main notes"])
+
     def test_markdown_escapes_untrusted_commit_subjects_and_authors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

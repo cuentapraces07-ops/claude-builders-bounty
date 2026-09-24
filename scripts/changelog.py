@@ -55,7 +55,14 @@ def repository_root(repo: Path) -> Path:
 
 
 def latest_tag(repo: Path) -> str | None:
-    output = _git(repo, "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)", "refs/tags")
+    output = _git(
+        repo,
+        "for-each-ref",
+        "--merged=HEAD",
+        "--sort=-creatordate",
+        "--format=%(refname:short)",
+        "refs/tags",
+    )
     return next((line.strip() for line in output.splitlines() if line.strip()), None)
 
 

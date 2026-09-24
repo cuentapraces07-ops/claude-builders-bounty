@@ -74,10 +74,10 @@ python -m unittest discover -s tests -v
 ```
 
 The suite covers conventional-commit classification, real git history since a
-tag, no-tag fallback, empty ranges, deterministic dates, invalid-date handling
-without a traceback, Markdown escaping for untrusted commit metadata, the
-slash-command skill, and the CLI's stdout path. The current local run completes
-with 8 tests passing.
+tag, ignoring tags outside the current history, no-tag fallback, empty ranges,
+deterministic dates, invalid-date handling without a traceback, Markdown
+escaping for untrusted commit metadata, the slash-command skill, and the CLI's
+stdout path. The current local run completes with 9 tests passing.
 
 ---
 
