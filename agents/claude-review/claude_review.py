@@ -171,7 +171,7 @@ def _fetch_file_api_diff(owner: str, repo: str, number: int) -> tuple[str, bool]
             old_marker = "/dev/null" if status == "added" else f"a/{old_filename}"
             new_marker = "/dev/null" if status == "removed" else f"b/{filename}"
             chunks.append(
-                f"diff --git a/{old_filename} b/{filename}\n"
+                f"diff --git {shlex.quote(f'a/{old_filename}')} {shlex.quote(f'b/{filename}')}\n"
                 f"--- {old_marker}\n+++ {new_marker}\n"
             )
             patch = entry.get("patch")

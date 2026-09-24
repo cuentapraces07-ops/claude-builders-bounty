@@ -202,6 +202,36 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("--- a/src/review.py\n+++ b/src/review.py", pr.diff)
         self.assertEqual(diff_stats(pr.diff), (1, 1, 1))
 
+    def test_files_api_fallback_preserves_paths_with_spaces_and_shell_punctuation(self):
+        metadata = json.dumps({"title": "Fallback paths", "body": ""}).encode()
+        filenames = ["src/space name.py", "src/quote' ;$(literal).py"]
+        files = json.dumps(
+            [
+                {
+                    "filename": filename,
+                    "status": "modified",
+                    "patch": "@@ -1 +1 @@\n-old()\n+new()",
+                }
+                for filename in filenames
+            ]
+        ).encode()
+
+        def request(url, accept):
+            if url == "https://api.github.com/repos/a/r/pulls/70":
+                return metadata
+            if url == "https://github.com/a/r/pull/70.diff":
+                raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, None)
+            if url == "https://api.github.com/repos/a/r/pulls/70/files?per_page=100&page=1":
+                return files
+            self.fail(f"unexpected request: {url}")
+
+        with mock.patch("claude_review._request", side_effect=request):
+            pr = fetch_pull("https://github.com/a/r/pull/70")
+
+        self.assertTrue(pr.diff_complete)
+        self.assertEqual(changed_files(pr.diff), tuple(filenames))
+        self.assertEqual(diff_stats(pr.diff), (2, 2, 2))
+
     def test_fetch_pull_reviews_reachable_diff_when_metadata_is_temporarily_unavailable(self):
         diff = b"diff --git a/src/review.py b/src/review.py\n--- a/src/review.py\n+++ b/src/review.py\n@@ -1 +1 @@\n-old()\n+new()\n"
 
