@@ -10,8 +10,9 @@ not an Opire claim, pull request, or payment request.
 - **Required destructive patterns:** the guard blocks recursive/forced `rm`,
   `git push --force` variants, `DROP TABLE`, `TRUNCATE`, and `DELETE FROM`
   unless the same SQL statement has a `WHERE` clause.
-- **Nested shell cases:** it inspects common wrappers, command substitutions,
-  backticks, and process substitutions with a finite nesting bound.
+- **Nested and wrapped commands:** it inspects common shell wrappers,
+  substitutions, `eval`, `find -exec`, `xargs`, and command-prefix utilities
+  such as `time`, `nice`, `timeout`, and `stdbuf`, with a finite nesting bound.
 - **Audit record:** each denial records a UTC timestamp, redacted and
   length-limited command, project path, and reason in
   `~/.claude/hooks/blocked.log`.
@@ -33,12 +34,11 @@ python -m pytest -q
 python -m compileall -q hooks tests
 ```
 
-On 2026-09-22, unittest discovery ran **31 test methods** (28 passed, 3
-platform-specific tests skipped); pytest reported **28 passed, 3 skipped, and
-43 subtests passed**. Compileall and `git diff --check` completed without
-errors. The tests use temporary settings and logs and do not modify the user's
-Claude Code configuration. The skipped checks require POSIX permission and
-symlink semantics and still need a POSIX run.
+On 2026-09-24, Windows unittest discovery ran **35 test methods** (32 passed,
+3 platform-specific tests skipped); pytest reported **32 passed, 3 skipped, and
+61 subtests passed**. `git diff --check` completed without errors. The tests
+use temporary settings and logs and do not modify the user's Claude Code
+configuration. POSIX permission and symlink checks require a POSIX run.
 
 ## Scope and limitation
 

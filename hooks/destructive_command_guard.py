@@ -102,13 +102,33 @@ def _shell_tokens(command: str) -> list[str]:
 
 def _segments(tokens: Iterable[str]) -> Iterable[list[str]]:
     segment: list[str] = []
+    find_action_terminator = False
+    find_command = False
     for token in tokens:
         if token in _SHELL_SEPARATORS:
+            if token == ";" and find_action_terminator:
+                # shlex emits an escaped find `-exec ... \;` terminator as
+                # the same punctuation token as a shell separator. Keep the
+                # first one inside the find expression; a later bare `;`
+                # still ends the shell segment.
+                segment.append(token)
+                find_action_terminator = False
+                continue
             if segment:
                 yield segment
                 segment = []
+            find_action_terminator = False
+            find_command = False
             continue
         segment.append(token)
+        if not find_command:
+            executable_index = _executable_index(segment)
+            if executable_index < len(segment):
+                find_command = Path(segment[executable_index]).name.lower() == "find"
+        if find_command and token in {"-exec", "-execdir", "-ok", "-okdir"}:
+            find_action_terminator = True
+        elif find_action_terminator and token in {";", "+"}:
+            find_action_terminator = False
     if segment:
         yield segment
 
@@ -172,6 +192,42 @@ def _executable_index(segment: list[str]) -> int:
                     index += 1
                 elif token.startswith("-"):
                     index += 1
+                else:
+                    break
+            continue
+
+        # These utilities execute one following command. Skip their options
+        # and option operands so the destructive-command checks below inspect
+        # the command that will actually run, not the wrapper itself.
+        if executable in {"time", "nice", "timeout", "stdbuf"}:
+            index += 1
+            value_options = {
+                "time": {"-f", "--format", "-o", "--output"},
+                "nice": {"-n", "--adjustment"},
+                "timeout": {"-k", "--kill-after", "-s", "--signal"},
+                "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+            }[executable]
+            while index < len(segment):
+                token = segment[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token in value_options:
+                    index += 2
+                elif token.startswith("--") and "=" in token:
+                    index += 1
+                elif executable == "timeout" and token in {
+                    "--foreground", "--preserve-status", "--verbose"
+                }:
+                    index += 1
+                elif token.startswith("-"):
+                    # Includes compact forms such as nice -n10 and
+                    # timeout -sKILL; their values are part of the token.
+                    index += 1
+                elif executable == "timeout":
+                    # timeout's first positional argument is its duration.
+                    index += 1
+                    break
                 else:
                     break
             continue
@@ -446,6 +502,72 @@ def _wrapped_script(segment: list[str]) -> str | None:
     return None
 
 
+def _embedded_commands(segment: list[str]) -> list[str]:
+    """Return command text executed through common command tools."""
+
+    index = _executable_index(segment)
+    if index >= len(segment):
+        return []
+    executable = Path(segment[index]).name.lower()
+    args = segment[index + 1 :]
+
+    # eval reparses the joined arguments as shell source.
+    if executable == "eval":
+        command = " ".join(args)
+        return [command] if command else []
+
+    if executable == "find":
+        commands = []
+        position = 0
+        while position < len(args):
+            token = args[position]
+            if token not in {"-exec", "-execdir", "-ok", "-okdir"}:
+                position += 1
+                continue
+            end = position + 1
+            while end < len(args) and args[end] not in {";", "+"}:
+                end += 1
+            command = args[position + 1 : end]
+            if command:
+                commands.append(shlex.join(command))
+            position = min(end + 1, len(args))
+        return commands
+
+    if executable != "xargs":
+        return []
+
+    value_options = {
+        "-a", "--arg-file", "-d", "--delimiter", "-E", "--eof", "-e",
+        "-I", "--replace", "-i", "-L", "--max-lines", "-l", "-n",
+        "--max-args", "-P", "--max-procs", "-s", "--max-chars",
+    }
+    flag_options = {
+        "-0", "--null", "-r", "--no-run-if-empty", "-p", "--interactive",
+        "-t", "--verbose", "-x", "--exit", "--show-limits",
+    }
+    position = 0
+    while position < len(args):
+        token = args[position]
+        if token == "--":
+            position += 1
+            break
+        if token in value_options:
+            position += 2
+        elif token in flag_options or (token.startswith("--") and "=" in token):
+            position += 1
+        elif token.startswith("-") and len(token) > 2 and token[1:2] in {
+            "a", "d", "E", "e", "I", "i", "L", "l", "n", "P", "s"
+        }:
+            # GNU xargs accepts attached short-option operands, e.g. -I{}.
+            position += 1
+        elif token.startswith("-"):
+            position += 1
+        else:
+            break
+    command = args[position:]
+    return [shlex.join(command)] if command else []
+
+
 def _balanced_command_substitution(command: str, start: int) -> tuple[str, int] | None:
     """Return the body/end of a balanced ``$(...)`` or process substitution.
 
@@ -611,6 +733,10 @@ def _detect_danger(command: str, depth: int) -> str | None:
         reason = _rm_reason(segment) or _git_force_reason(segment) or _sql_reason(segment)
         if reason:
             return reason
+        for embedded in _embedded_commands(segment):
+            reason = _detect_danger(embedded, depth + 1)
+            if reason:
+                return reason
         # Recursively inspect inline shell scripts such as
         # ``bash -lc 'git push --force origin main'``.  The depth is naturally
         # bounded by the command's token count, and an empty script is safe.

@@ -52,7 +52,11 @@ through `git -c remote.<name>.push=+...`), `DROP TABLE`, `TRUNCATE`, and `DELETE
 without a `WHERE` clause. It also inspects `$(...)`, backticks, and process
 substitutions for nested destructive commands, while leaving single-quoted and
 escaped examples untouched; shell nesting deeper than 32 levels is denied
-conservatively. Every denial is appended as one JSON line to
+conservatively. It also follows common command prefixes (`time`, `nice`,
+`timeout`, and `stdbuf`) and inspects direct commands run through `eval`,
+`find -exec`, and `xargs`. This is a best-effort guard, not a complete shell
+parser or security sandbox; do not treat an allowed command as proof that
+arbitrary dynamic code is safe. Every denial is appended as one JSON line to
 `~/.claude/hooks/blocked.log`, including the UTC timestamp, a best-effort
 redacted and length-limited attempted command, and project path. Common secret
 flags, credential assignments, bearer values, credential-bearing URLs, and

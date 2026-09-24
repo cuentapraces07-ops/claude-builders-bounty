@@ -61,6 +61,35 @@ class GuardDetectionTests(unittest.TestCase):
                 self.assertIsNotNone(detect_danger(command))
         self.assertIsNone(detect_danger("command echo 'DROP TABLE accounts'"))
 
+    def test_blocks_commands_executed_through_time_eval_find_and_xargs(self) -> None:
+        for command in (
+            "time rm -rf ./build",
+            "nice -n 10 git push --force origin main",
+            "timeout --signal=TERM 5s rm -rf ./build",
+            "stdbuf -oL git push --force origin main",
+            "eval 'rm -rf ./build'",
+            "find ./build -exec rm -rf {} +",
+            r"find ./build -exec rm -rf {} \;",
+            r"find . -exec echo safe \; -exec rm -rf ./build \;",
+            r"find . -exec echo safe \; ; rm -rf ./build",
+            "find . -exec echo safe + -exec rm -rf ./build +",
+            "find ./build -exec sh -c 'rm -rf \"$1\"' sh {} +",
+            "xargs -0 -I{} rm -rf < targets.txt",
+            "xargs --arg-file targets.txt --no-run-if-empty git push --force origin main",
+            "xargs -a targets.txt sh -c 'git push --force origin main' sh",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+
+        for command in (
+            "time echo 'rm -rf ./build'",
+            "eval 'echo safe'",
+            "find . -exec echo 'rm -rf ./build' {} +",
+            "xargs -I{} echo 'rm -rf ./build' < targets.txt",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(detect_danger(command))
+
     def test_blocks_destructive_commands_through_busybox_applets(self) -> None:
         self.assertIsNotNone(detect_danger("busybox rm -rf ./build"))
 
