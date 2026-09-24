@@ -38,7 +38,9 @@ On 2026-09-24, Windows unittest discovery ran **35 test methods** (32 passed,
 3 platform-specific tests skipped); pytest reported **32 passed, 3 skipped, and
 61 subtests passed**. `git diff --check` completed without errors. The tests
 use temporary settings and logs and do not modify the user's Claude Code
-configuration. POSIX permission and symlink checks require a POSIX run.
+configuration. The GitHub Actions run for the published follow-up also passed
+on Windows and Ubuntu, exercising the POSIX permission and symlink checks on
+Ubuntu.
 
 ## Scope and limitation
 
