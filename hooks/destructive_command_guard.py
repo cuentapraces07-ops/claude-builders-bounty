@@ -32,7 +32,10 @@ _SHELL_WRAPPERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 _MAX_SHELL_NESTING = 32
 _SQL_DROP_RE = re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE)
 _SQL_TRUNCATE_RE = re.compile(r"\bTRUNCATE(?:\s+TABLE)?\b", re.IGNORECASE)
-_SQL_DELETE_RE = re.compile(r"\bDELETE\s+FROM\b", re.IGNORECASE)
+_SQL_DELETE_RE = re.compile(
+    r"\bDELETE(?:\s+|/\*.*?\*/)+FROM\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SQL_DOLLAR_QUOTE_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 _GIT_REMOTE_PUSH_CONFIG_RE = re.compile(r"^remote\.[^.]+\.push$", re.IGNORECASE)
 _GIT_REMOTE_MIRROR_CONFIG_RE = re.compile(r"^remote\.[^.]+\.mirror$", re.IGNORECASE)
@@ -180,6 +183,15 @@ def _executable_index(segment: list[str]) -> int:
             elif executable == "command":
                 while index < len(segment) and segment[index] in {"-p", "-v", "-V"}:
                     index += 1
+            continue
+
+        # BusyBox exposes applets (including `rm`) as subcommands. Treat the
+        # applet name as the executable so the same destructive-command rules
+        # apply to `busybox rm -rf ...` as to a direct `rm -rf ...` call.
+        if executable == "busybox":
+            index += 1
+            if index < len(segment) and segment[index] == "--":
+                index += 1
             continue
 
         return index

@@ -61,6 +61,9 @@ class GuardDetectionTests(unittest.TestCase):
                 self.assertIsNotNone(detect_danger(command))
         self.assertIsNone(detect_danger("command echo 'DROP TABLE accounts'"))
 
+    def test_blocks_destructive_commands_through_busybox_applets(self) -> None:
+        self.assertIsNotNone(detect_danger("busybox rm -rf ./build"))
+
     def test_blocks_dangerous_commands_inside_shell_substitutions(self) -> None:
         for command in (
             'echo "$(rm -rf ./build)"',
@@ -108,6 +111,9 @@ class GuardDetectionTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(detect_danger(command))
         self.assertIsNone(detect_danger('mysql -e "DELETE FROM users WHERE id = 1"'))
+
+    def test_sql_block_comments_between_delete_and_from_do_not_bypass_guard(self) -> None:
+        self.assertIsNotNone(detect_danger('sqlite3 app.db "DELETE /* comment */ FROM users"'))
 
     def test_sql_strings_and_subqueries_cannot_supply_a_fake_where_clause(self) -> None:
         for command in (
