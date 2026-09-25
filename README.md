@@ -77,7 +77,8 @@ The suite covers conventional-commit classification, real git history since a
 tag, ignoring tags outside the current history, no-tag fallback, empty ranges,
 deterministic dates, invalid-date handling without a traceback, Markdown
 escaping for untrusted commit metadata, the slash-command skill, and the CLI's
-stdout path. The current local run completes with 9 tests passing.
+stdout path, plus retention of unrecognized commit subjects under `Changed`.
+The current local run completes with 10 tests passing.
 
 ---
 
