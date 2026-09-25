@@ -56,15 +56,19 @@ def repository_root(repo: Path) -> Path:
 
 
 def latest_tag(repo: Path) -> str | None:
-    output = _git(
+    reachable_tags = _git(
         repo,
         "for-each-ref",
         "--merged=HEAD",
-        "--sort=-creatordate",
         "--format=%(refname:short)",
         "refs/tags",
     )
-    return next((line.strip() for line in output.splitlines() if line.strip()), None)
+    if not any(line.strip() for line in reachable_tags.splitlines()):
+        return None
+    # Select the closest tag in commit history. Sorting refs by tagger or
+    # creator date can choose an older ancestor when its tag was recreated
+    # more recently than a release tag nearer to HEAD.
+    return _git(repo, "describe", "--tags", "--abbrev=0").strip()
 
 
 def commits_since(repo: Path, base: str | None) -> list[Commit]:

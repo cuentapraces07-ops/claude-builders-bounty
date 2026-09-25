@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -97,6 +98,37 @@ class ChangelogTests(unittest.TestCase):
             self.assertEqual(latest_tag(repo), "v1.0.0")
             commits = commits_since(repo, latest_tag(repo))
             self.assertEqual([commit.subject for commit in commits], ["fix: update main notes"])
+
+    def test_default_chooses_nearest_reachable_tag_not_newest_tag_date(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+
+            def run(*args: str, tagger_date: str | None = None) -> str:
+                env = os.environ.copy()
+                if tagger_date:
+                    env["GIT_COMMITTER_DATE"] = tagger_date
+                return subprocess.run(
+                    ["git", "-C", str(repo), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                ).stdout
+
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            (repo / "notes.txt").write_text("initial\n", encoding="utf-8")
+            run("add", "notes.txt")
+            run("commit", "-qm", "feat: add notes")
+            run("tag", "-a", "v1.0.0", "-m", "v1", tagger_date="2026-09-24T00:00:00+00:00")
+            (repo / "notes.txt").write_text("release two\n", encoding="utf-8")
+            run("commit", "-qam", "feat: add second release")
+            run("tag", "-a", "v2.0.0", "-m", "v2", tagger_date="2026-09-23T00:00:00+00:00")
+            (repo / "notes.txt").write_text("head\n", encoding="utf-8")
+            run("commit", "-qam", "fix: update after v2")
+
+            self.assertEqual(latest_tag(repo), "v2.0.0")
 
     def test_markdown_escapes_untrusted_commit_subjects_and_authors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
