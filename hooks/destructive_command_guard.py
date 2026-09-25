@@ -783,6 +783,10 @@ def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
     fd: int | None = None
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # O_NOFOLLOW protects the final open on platforms that provide it.
+        # Check explicitly as well so Windows refuses a symlink audit target.
+        if log_path.is_symlink():
+            raise OSError("Refusing to follow a symlink audit log")
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
         flags |= getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)

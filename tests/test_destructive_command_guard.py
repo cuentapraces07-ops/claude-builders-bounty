@@ -301,8 +301,7 @@ class HookInvocationTests(unittest.TestCase):
         self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("DROP TABLE", decision["hookSpecificOutput"]["permissionDecisionReason"])
 
-    @unittest.skipUnless(os.name == "posix", "POSIX file permissions are not available")
-    def test_audit_file_permissions_are_restricted_even_when_file_exists(self) -> None:
+    def test_existing_audit_file_is_secured_or_logged_by_platform(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             log_path = Path(directory) / "blocked.log"
             log_path.write_text("", encoding="utf-8")
@@ -311,22 +310,36 @@ class HookInvocationTests(unittest.TestCase):
             output = io.StringIO()
             with mock.patch.dict("os.environ", {"CLAUDE_HOOK_LOG": str(log_path)}, clear=False):
                 self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
-            self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+            self.assertTrue(log_path.exists())
+            decision = json.loads(output.getvalue())
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+            else:
+                self.assertIn("attempted_command", log_path.read_text(encoding="utf-8"))
 
-    @unittest.skipUnless(os.name == "posix", "POSIX symlink behavior is not available")
     def test_audit_log_does_not_follow_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "other.log"
             target.write_text("untouched", encoding="utf-8")
             log_path = Path(directory) / "blocked.log"
-            log_path.symlink_to(target)
+            if os.name == "posix":
+                log_path.symlink_to(target)
             payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"}}
             output = io.StringIO()
             with mock.patch.dict("os.environ", {"CLAUDE_HOOK_LOG": str(log_path)}, clear=False):
-                self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+                if os.name == "nt":
+                    # Windows CI may not grant symlink creation privileges.
+                    # Exercise the same detection branch without skipping the test.
+                    with mock.patch.object(Path, "is_symlink", return_value=True):
+                        self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
+                else:
+                    self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
             decision = json.loads(output.getvalue())
             self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched")
+            if os.name == "nt":
+                self.assertFalse(log_path.exists())
 
     def test_non_bash_tool_is_ignored(self) -> None:
         output = io.StringIO()
@@ -385,7 +398,6 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(settings_path.read_bytes(), original)
             self.assertEqual(list(settings_path.parent.glob(".settings.json.*.tmp")), [])
 
-    @unittest.skipUnless(os.name == "posix", "POSIX file permissions are not available")
     def test_installer_preserves_existing_settings_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -393,10 +405,11 @@ class InstallerTests(unittest.TestCase):
             settings_path.parent.mkdir(parents=True)
             settings_path.write_text("{}\n", encoding="utf-8")
             settings_path.chmod(0o640)
+            original_mode = stat.S_IMODE(settings_path.stat().st_mode)
 
             install(home)
 
-            self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o640)
+            self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), original_mode)
 
     def test_installed_hook_processes_real_pretooluse_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
