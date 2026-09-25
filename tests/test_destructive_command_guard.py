@@ -295,7 +295,7 @@ class HookInvocationTests(unittest.TestCase):
     def test_logging_failure_still_denies_the_command(self) -> None:
         output = io.StringIO()
         payload = {"tool_name": "Bash", "tool_input": {"command": "DROP TABLE accounts"}}
-        with mock.patch("hooks.destructive_command_guard.os.open", side_effect=OSError("disk full")):
+        with mock.patch("hooks.destructive_command_guard._open_audit_log", side_effect=OSError("disk full")):
             self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
         decision = json.loads(output.getvalue())
         self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
@@ -323,23 +323,21 @@ class HookInvocationTests(unittest.TestCase):
             target = Path(directory) / "other.log"
             target.write_text("untouched", encoding="utf-8")
             log_path = Path(directory) / "blocked.log"
-            if os.name == "posix":
-                log_path.symlink_to(target)
+            log_path.symlink_to(target)
             payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf ./build"}}
             output = io.StringIO()
             with mock.patch.dict("os.environ", {"CLAUDE_HOOK_LOG": str(log_path)}, clear=False):
                 if os.name == "nt":
-                    # Windows CI may not grant symlink creation privileges.
-                    # Exercise the same detection branch without skipping the test.
-                    with mock.patch.object(Path, "is_symlink", return_value=True):
+                    # Force the final open to protect against a link swapped
+                    # into place after the preliminary path check.
+                    with mock.patch.object(Path, "is_symlink", return_value=False):
                         self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
                 else:
                     self.assertEqual(main(io.StringIO(json.dumps(payload)), output), 0)
             decision = json.loads(output.getvalue())
             self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched")
-            if os.name == "nt":
-                self.assertFalse(log_path.exists())
+            self.assertTrue(log_path.is_symlink())
 
     def test_non_bash_tool_is_ignored(self) -> None:
         output = io.StringIO()

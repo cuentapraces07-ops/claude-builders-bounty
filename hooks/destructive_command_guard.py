@@ -767,6 +767,96 @@ def _hooks_dir() -> Path:
     return Path(os.environ.get("CLAUDE_HOOKS_DIR", str(Path.home() / ".claude" / "hooks"))).expanduser()
 
 
+def _open_audit_log(log_path: Path, flags: int, mode: int) -> int:
+    """Open the audit log without following a final-component link."""
+
+    if os.name != "nt":
+        return os.open(log_path, flags, mode)
+
+    # Windows' os.open has no O_NOFOLLOW equivalent. Open the reparse point
+    # itself with CreateFileW, inspect that same handle, and reject it before
+    # converting the handle to a writable file descriptor. This avoids the
+    # check-then-open race of Path.is_symlink().
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = [
+            ("FileAttributes", wintypes.DWORD),
+            ("ReparseTag", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_file_information = kernel32.GetFileInformationByHandleEx
+    get_file_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_file_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    file_append_data = 0x0004
+    file_read_attributes = 0x0080
+    file_share_all = 0x0001 | 0x0002 | 0x0004
+    open_always = 4
+    file_attribute_normal = 0x0080
+    file_flag_open_reparse_point = 0x00200000
+    file_attribute_reparse_point = 0x0400
+    file_attribute_tag_info_class = 9
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    handle = create_file(
+        os.fspath(log_path),
+        file_append_data | file_read_attributes,
+        file_share_all,
+        None,
+        open_always,
+        file_attribute_normal | file_flag_open_reparse_point,
+        None,
+    )
+    if handle == invalid_handle_value:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    handle_owned = True
+    try:
+        tag_info = FileAttributeTagInfo()
+        if not get_file_information(
+            handle,
+            file_attribute_tag_info_class,
+            ctypes.byref(tag_info),
+            ctypes.sizeof(tag_info),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if tag_info.FileAttributes & file_attribute_reparse_point:
+            raise OSError(
+                "refusing to append to a reparse-point audit log: "
+                f"{log_path}"
+            )
+
+        fd = msvcrt.open_osfhandle(int(handle), os.O_WRONLY | os.O_APPEND)
+        handle_owned = False  # The CRT file descriptor now owns the handle.
+        return fd
+    finally:
+        if handle_owned:
+            close_handle(handle)
+
+
 def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
     hooks_dir = _hooks_dir()
     log_path = Path(os.environ.get("CLAUDE_HOOK_LOG", str(hooks_dir / "blocked.log"))).expanduser()
@@ -783,14 +873,14 @@ def _log_block(payload: dict[str, Any], command: str, reason: str) -> None:
     fd: int | None = None
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # O_NOFOLLOW protects the final open on platforms that provide it.
-        # Check explicitly as well so Windows refuses a symlink audit target.
+        # Fast-path obvious links; _open_audit_log also protects the actual
+        # open against a link being substituted after this check.
         if log_path.is_symlink():
             raise OSError("Refusing to follow a symlink audit log")
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
         flags |= getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(log_path, flags, 0o600)
+        fd = _open_audit_log(log_path, flags, 0o600)
         if os.name == "posix":
             # Also restrict an existing log file, not just a newly created one.
             os.fchmod(fd, 0o600)
