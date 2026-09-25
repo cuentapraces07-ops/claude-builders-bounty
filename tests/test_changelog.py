@@ -28,6 +28,9 @@ class ChangelogTests(unittest.TestCase):
         self.assertEqual(classify("remove legacy endpoint")[0], "Removed")
         self.assertEqual(classify("docs: update examples")[0], "Changed")
 
+    def test_unrecognized_commit_subject_is_kept_under_changed(self) -> None:
+        self.assertEqual(classify("Initial commit"), ("Changed", "Initial commit"))
+
     def test_reads_commits_since_last_tag_from_a_real_git_repo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
