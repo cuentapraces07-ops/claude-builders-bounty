@@ -4,14 +4,14 @@ This file is the operating contract for an opinionated, production-ready SaaS bu
 
 ## Stack and versions
 
-- Node.js 20 LTS or newer LTS; use the version declared in `.nvmrc` or `engines`.
-- Next.js 15 App Router with React 19 and TypeScript in strict mode.
-- `pnpm` is the package manager. Never mix `npm`, `yarn`, and `pnpm` lockfiles.
-- SQLite for local and single-instance deployments, using `better-sqlite3` behind a small repository layer. Turso/libSQL is the production-compatible remote option; application code must use the same repository interface for both.
-- Zod validates every untrusted boundary: form data, route params, search params, webhook bodies, and environment variables.
-- Vitest is the unit-test runner; Playwright covers critical browser flows.
+- Node.js 20 LTS or newer LTS; use the version declared in `.nvmrc` or `engines`. **Why:** one declared runtime makes local development and CI reproducible.
+- Next.js 15 App Router with React 19 and TypeScript in strict mode. **Why:** a fixed stack lets a greenfield project follow examples and tooling without choosing compatible versions.
+- `pnpm` is the package manager. Never mix `npm`, `yarn`, and `pnpm` lockfiles. **Why:** competing lockfiles can resolve different dependency trees on different machines.
+- SQLite for local and single-instance deployments, using `better-sqlite3` behind a small repository layer. Turso/libSQL is the production-compatible remote option; application code must use the same repository interface for both. **Why:** one data contract supports local development and remote SQLite without scattering driver-specific code.
+- Zod validates every untrusted boundary: form data, route params, search params, webhook bodies, and environment variables. **Why:** parsing at entry points prevents invalid values from reaching privileged operations.
+- Vitest is the unit-test runner; Playwright covers critical browser flows. **Why:** fast isolated checks and a small number of real-browser journeys catch different classes of regression.
 
-When a repository already pins a compatible patch version, keep that pin. Do not upgrade the framework, database driver, or auth library as part of an unrelated feature.
+When a repository already pins a compatible patch version, keep that pin. Do not upgrade the framework, database driver, or auth library as part of an unrelated feature. **Why:** unrelated upgrades expand the review surface and can introduce regressions unrelated to the requested change.
 
 ## Non-negotiable rules
 
@@ -56,16 +56,16 @@ Keep feature code close to its route, but keep database access, authorization, a
 
 ## Naming conventions
 
-- Use `kebab-case` for route folders, feature folders, file names, database migration files, and URL slugs; predictable paths make imports, links, and deploy tooling portable across case-sensitive filesystems.
-- Use `PascalCase` for React component files, exported component names, domain types, and Zod schemas (for example, `InvoiceTable.tsx`, `Invoice`, and `InvoiceInput`); a reader can distinguish a renderable/type contract from a function at a glance.
-- Use `camelCase` for functions, local values, Server Actions, and repository methods (for example, `createInvoice` and `findInvoiceById`); this matches TypeScript and Next.js conventions without inventing a second naming dialect.
-- Prefix custom React hooks with `use` and place them in `hooks/` or next to the feature that owns them; the prefix lets React tooling and reviewers recognize hook call rules.
-- Name repository methods with an explicit verb and aggregate (`findWorkspaceMember`, `listInvoicesForWorkspace`, `createInvoice`); vague `getData` helpers hide authorization and query intent.
-- Number migrations with a sortable UTC prefix and a `kebab-case` intent (for example, `20260327_120000_add-invoice-status.sql`); immutable ordering prevents different environments from applying schema changes in a different sequence.
+- Use `kebab-case` for route folders, feature folders, file names, database migration files, and URL slugs. **Why:** predictable paths keep imports, links, and deploy tooling portable across case-sensitive filesystems.
+- Use `PascalCase` for React component files, exported component names, domain types, and Zod schemas (for example, `InvoiceTable.tsx`, `Invoice`, and `InvoiceInput`). **Why:** a reader can distinguish a renderable/type contract from a function at a glance.
+- Use `camelCase` for functions, local values, Server Actions, and repository methods (for example, `createInvoice` and `findInvoiceById`). **Why:** this matches TypeScript and Next.js conventions without inventing a second naming dialect.
+- Prefix custom React hooks with `use` and place them in `hooks/` or next to the feature that owns them. **Why:** the prefix lets React tooling and reviewers recognize hook call rules.
+- Name repository methods with an explicit verb and aggregate (`findWorkspaceMember`, `listInvoicesForWorkspace`, `createInvoice`). **Why:** vague `getData` helpers hide authorization and query intent.
+- Number migrations with a sortable UTC prefix and a `kebab-case` intent (for example, `20260327_120000_add-invoice-status.sql`). **Why:** immutable ordering prevents different environments from applying schema changes in a different sequence.
 
 ## Package scripts
 
-The root `package.json` must expose these commands (an existing project may add flags, but must keep the intent):
+The root `package.json` must expose these commands (an existing project may add flags, but must keep the intent). **Why:** consistent entry points make setup, CI, and handoff predictable for a new contributor:
 
 ```json
 {
@@ -82,70 +82,70 @@ The root `package.json` must expose these commands (an existing project may add 
 }
 ```
 
-Before opening a PR, run `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and the relevant Playwright project. A failed check is a stop signal, not something to hide with a skipped test.
+Before opening a PR, run `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and the relevant Playwright project. A failed check is a stop signal, not something to hide with a skipped test. **Why:** checking static analysis, behavior, production compilation, and a real browser path catches distinct failure modes before review.
 
 ## Environment and configuration
 
-Create `.env.example` with names and safe example values; keep real `.env*` files out of Git. Parse configuration once in `lib/env.ts` with Zod and import that module instead of reading `process.env` throughout the app.
+Create `.env.example` with names and safe example values; keep real `.env*` files out of Git. Parse configuration once in `lib/env.ts` with Zod and import that module instead of reading `process.env` throughout the app. **Why:** a single validated configuration boundary documents setup without leaking secrets or allowing inconsistent parsing.
 
 Required production categories:
 
-- `DATABASE_URL` (SQLite path or Turso URL) and, for Turso, `DATABASE_AUTH_TOKEN`.
-- `AUTH_SECRET` with a documented minimum length; never use a development fallback in production.
-- `APP_URL` validated as an absolute HTTPS URL in production.
-- Provider credentials and webhook secrets, if used.
+- `DATABASE_URL` (SQLite path or Turso URL) and, for Turso, `DATABASE_AUTH_TOKEN`. **Why:** the data adapter needs an explicit target and authenticated remote access.
+- `AUTH_SECRET` with a documented minimum length; never use a development fallback in production. **Why:** predictable secret strength protects signed sessions, while a fallback would make production credentials guessable.
+- `APP_URL` validated as an absolute HTTPS URL in production. **Why:** canonical origin validation prevents insecure callback and redirect configuration.
+- Provider credentials and webhook secrets, if used. **Why:** integrations should fail clearly when configured but missing their authentication material.
 
-Fail fast at startup for missing production variables. Development may provide explicit local defaults only when the value cannot authenticate to a real service.
+Fail fast at startup for missing production variables. Development may provide explicit local defaults only when the value cannot authenticate to a real service. **Why:** configuration errors surface before serving traffic, while harmless local defaults avoid blocking setup without granting production access.
 
 ## Database and migration rules
 
-- Every schema change is a numbered, committed migration. Migrations are forward-only, idempotent, run in a transaction where SQLite permits it, and record their version in a migrations table.
-- Never edit an applied migration. Add a new migration for corrections.
-- Add indexes only for demonstrated query paths; document the query they support.
-- New columns are nullable or have a safe default before application code relies on them. Backfill in a separate bounded step, then tighten constraints in a later migration.
-- Preserve user data. Do not use `DROP TABLE`, `DELETE` without a narrow predicate, or a destructive reset in a production path.
-- Enable foreign keys on every connection and use UTC ISO-8601 timestamps (or integer epoch milliseconds) consistently.
-- Transactions must include all writes that must succeed or fail together. Do not perform network calls while holding a database transaction.
-- Repositories return domain-shaped values, not raw driver rows. Map nullable database fields explicitly.
+- Every schema change is a numbered, committed migration. Migrations are forward-only, idempotent, run in a transaction where SQLite permits it, and record their version in a migrations table. **Why:** a durable ordered ledger lets every environment reproduce the same schema safely.
+- Never edit an applied migration. Add a new migration for corrections. **Why:** changing history makes already-upgraded databases diverge from fresh installs.
+- Add indexes only for demonstrated query paths; document the query they support. **Why:** indexes have write and storage costs, so each should solve an observable query need.
+- New columns are nullable or have a safe default before application code relies on them. Backfill in a separate bounded step, then tighten constraints in a later migration. **Why:** staged expansion avoids breaking old application versions and large live tables.
+- Preserve user data. Do not use `DROP TABLE`, `DELETE` without a narrow predicate, or a destructive reset in a production path. **Why:** a mistaken migration or predicate must not irreversibly erase customer records.
+- Enable foreign keys on every connection and use UTC ISO-8601 timestamps (or integer epoch milliseconds) consistently. **Why:** connection-local enforcement prevents orphan rows, and one time representation avoids locale-dependent comparisons.
+- Transactions must include all writes that must succeed or fail together. Do not perform network calls while holding a database transaction. **Why:** atomic local changes stay consistent without making locks depend on a remote service.
+- Repositories return domain-shaped values, not raw driver rows. Map nullable database fields explicitly. **Why:** callers should not depend on SQL column shape or mistake database nullability for a domain guarantee.
 
-For SQLite concurrency, keep transactions short, set a busy timeout, and prefer WAL mode. For Turso, avoid relying on local process state or SQLite-specific filesystem APIs.
+For SQLite concurrency, keep transactions short, set a busy timeout, and prefer WAL mode. For Turso, avoid relying on local process state or SQLite-specific filesystem APIs. **Why:** bounded locks improve local contention behavior, while remote deployments cannot safely depend on one process's filesystem or memory.
 
 ## Components, routes, and Server Actions
 
-- Define the data contract first: Zod input schema, domain result, and safe error codes.
-- Use `loading.tsx`, `error.tsx`, and `not-found.tsx` at route boundaries where a slow or missing resource is expected.
-- Mutating forms use a Server Action or Route Handler that validates the complete payload again. Disable the submit control while pending and make success/failure visible without relying on a toast alone.
-- Use stable IDs and accessible labels. Every interactive control has a keyboard path, visible focus state, and a meaningful name.
-- Do not fetch the same server data again from a Client Component when the Server Component already owns it; pass the smallest serializable props.
-- Cache only public or explicitly scoped data. Mark user-specific data dynamic and revalidate after mutations.
-- Use `redirect()` only after successful authorization and mutation; never place untrusted input directly in a redirect target.
+- Define the data contract first: Zod input schema, domain result, and safe error codes. **Why:** agreeing on valid input and failure shapes prevents UI and persistence layers from inventing incompatible behavior.
+- Use `loading.tsx`, `error.tsx`, and `not-found.tsx` at route boundaries where a slow or missing resource is expected. **Why:** users receive an explicit pending, recovery, or absence state instead of a blank screen or leaked exception.
+- Mutating forms use a Server Action or Route Handler that validates the complete payload again. Disable the submit control while pending and make success/failure visible without relying on a toast alone. **Why:** server validation is the trust boundary, and visible state helps prevent duplicate submissions and silent failures.
+- Use stable IDs and accessible labels. Every interactive control has a keyboard path, visible focus state, and a meaningful name. **Why:** stable identity prevents list-state bugs and accessible controls support keyboard and assistive-technology users.
+- Do not fetch the same server data again from a Client Component when the Server Component already owns it; pass the smallest serializable props. **Why:** duplicate requests add latency and can expose more data to the browser than the UI needs.
+- Cache only public or explicitly scoped data. Mark user-specific data dynamic and revalidate after mutations. **Why:** cache leakage can cross account boundaries, and stale views misrepresent a successful write.
+- Use `redirect()` only after successful authorization and mutation; never place untrusted input directly in a redirect target. **Why:** this avoids redirecting unauthorized users or creating open redirects from attacker-controlled data.
 
 ## Authentication, authorization, and webhooks
 
-- Store only a session identifier in an HttpOnly, Secure, SameSite cookie. Rotate sessions after sign-in and privilege changes.
-- Check tenant/resource ownership in the repository or service layer, not only in page code.
-- Rate-limit login, password reset, search, and webhook endpoints. Verify webhook signatures over the raw body before parsing JSON, reject stale timestamps, and make event handling idempotent.
-- Return the same safe response shape for authentication failures to avoid account enumeration.
+- Store only a session identifier in an HttpOnly, Secure, SameSite cookie. Rotate sessions after sign-in and privilege changes. **Why:** cookie flags reduce browser exposure and rotation invalidates sessions issued under an older identity state.
+- Check tenant/resource ownership in the repository or service layer, not only in page code. **Why:** every call path, including direct requests and background work, must enforce the same data boundary.
+- Rate-limit login, password reset, search, and webhook endpoints. Verify webhook signatures over the raw body before parsing JSON, reject stale timestamps, and make event handling idempotent. **Why:** these controls constrain brute force and replay while making retried deliveries safe.
+- Return the same safe response shape for authentication failures to avoid account enumeration. **Why:** different failure details can reveal which identities exist.
 
 ## SQL, API, and external service conventions
 
-- Repository functions accept typed arguments and return typed results. Use explicit column lists; never rely on `SELECT *` across migrations.
-- Route handlers set correct status codes (`400` validation, `401` unauthenticated, `403` unauthorized, `404` absent, `409` conflict, `429` rate limit, `5xx` unexpected).
-- Outbound `fetch` calls have an allowlisted origin, timeout, bounded retries only for idempotent operations, and structured error handling. Never retry a payment or other non-idempotent mutation without an idempotency key.
-- Keep third-party response bodies out of logs unless explicitly redacted and bounded.
+- Repository functions accept typed arguments and return typed results. Use explicit column lists; never rely on `SELECT *` across migrations. **Why:** explicit shape makes schema changes reviewable and limits accidental data exposure.
+- Route handlers set correct status codes (`400` validation, `401` unauthenticated, `403` unauthorized, `404` absent, `409` conflict, `429` rate limit, `5xx` unexpected). **Why:** clients and operators need a stable way to distinguish recoverable input errors from access and server failures.
+- Outbound `fetch` calls have an allowlisted origin, timeout, bounded retries only for idempotent operations, and structured error handling. Never retry a payment or other non-idempotent mutation without an idempotency key. **Why:** bounded network behavior reduces hangs and prevents retries from duplicating side effects.
+- Keep third-party response bodies out of logs unless explicitly redacted and bounded. **Why:** provider payloads can contain secrets or personal data and may be arbitrarily large.
 
 ## Testing and review checklist
 
 For every feature or bug fix, add the smallest tests that prove the behavior and its failure modes:
 
-- schema tests for missing, wrong-type, boundary, and extra fields;
-- repository tests for authorization scope, empty results, conflicts, and transaction rollback;
-- route/action tests for status codes and safe error envelopes;
-- regression tests for the reported bug;
-- an accessibility smoke check for new interactive UI;
-- an end-to-end happy path and one recovery path for user-visible flows.
+- schema tests for missing, wrong-type, boundary, and extra fields. **Why:** boundary cases reveal invalid states that happy-path samples miss.
+- repository tests for authorization scope, empty results, conflicts, and transaction rollback. **Why:** data-layer tests protect tenant isolation and atomicity without a browser.
+- route/action tests for status codes and safe error envelopes. **Why:** consumers rely on these externally observable contracts.
+- regression tests for the reported bug. **Why:** a reproducible failing case prevents the same defect from returning.
+- an accessibility smoke check for new interactive UI. **Why:** keyboard and label regressions are easy to introduce while changing visible controls.
+- an end-to-end happy path and one recovery path for user-visible flows. **Why:** the two paths prove both normal use and the most relevant failure recovery across layers.
 
-Use deterministic clocks and IDs in tests. Assert observable behavior, not private implementation details. Do not weaken a test because a production bug makes it inconvenient.
+Use deterministic clocks and IDs in tests. Assert observable behavior, not private implementation details. Do not weaken a test because a production bug makes it inconvenient. **Why:** deterministic observable checks remain stable through refactors and keep failures reproducible.
 
 The minimum pre-PR gate is:
 
@@ -157,7 +157,7 @@ pnpm build
 pnpm test:e2e --project=chromium
 ```
 
-Record the commands and their results in the PR description. If a command cannot run in a constrained environment, state the exact limitation and run the closest hermetic substitute.
+Record the commands and their results in the PR description. If a command cannot run in a constrained environment, state the exact limitation and run the closest hermetic substitute. **Why:** explicit evidence distinguishes a completed gate from an unavailable or skipped one.
 
 ## What we do not do (and why)
 

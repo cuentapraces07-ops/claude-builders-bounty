@@ -6,6 +6,7 @@ authenticated installation.
 """
 
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
@@ -46,6 +47,26 @@ class ClaudeTemplateContractTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertIn(value, self.text)
+
+    def test_every_rule_bullet_has_an_explicit_reason(self) -> None:
+        in_fence = False
+        violations = []
+        for number, line in enumerate(self.text.splitlines(), start=1):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence or line.lstrip().startswith("|"):
+                continue
+            content = line.strip()
+            if content.startswith("- ") or re.match(r"^\d+\. ", content):
+                if "**Why:**" not in content:
+                    violations.append(number)
+
+        self.assertEqual(
+            violations,
+            [],
+            f"Every normative list item needs an explicit **Why:** rationale; lines: {violations}",
+        )
 
     def test_greenfield_defaults_and_pre_pr_gate_are_actionable(self) -> None:
         for value in (
