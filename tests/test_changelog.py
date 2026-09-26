@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.changelog import classify, commits_since, latest_tag, main, markdown
 
@@ -238,6 +239,36 @@ class ChangelogTests(unittest.TestCase):
             run("commit", "-qam", "fix: correct notes")
             self.assertEqual(main(["--repo", str(repo), "--date", "2026-09-25"]), 0)
             self.assertIn("correct notes", output.read_text(encoding="utf-8"))
+
+    def test_cli_preserves_existing_generated_file_if_atomic_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run = lambda *args: subprocess.run(
+                ["git", "-C", str(repo), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            (repo / "notes.txt").write_text("initial\n", encoding="utf-8")
+            run("add", "notes.txt")
+            run("commit", "-qm", "docs: add notes")
+            output = repo / "CHANGELOG.md"
+
+            self.assertEqual(main(["--repo", str(repo), "--date", "2026-09-25"]), 0)
+            original = output.read_text(encoding="utf-8")
+
+            errors = io.StringIO()
+            with patch("scripts.changelog.os.replace", side_effect=OSError("simulated failure")):
+                with redirect_stderr(errors):
+                    result = main(["--repo", str(repo), "--date", "2026-09-26"])
+
+            self.assertEqual(result, 2)
+            self.assertIn("simulated failure", errors.getvalue())
+            self.assertEqual(output.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(repo.glob(".CHANGELOG.md.*.tmp")), [])
 
 
 if __name__ == "__main__":

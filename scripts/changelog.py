@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -174,6 +175,33 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def atomic_write_text(output: Path, content: str) -> None:
+    """Write a complete changelog before replacing the destination."""
+    temporary_path: str | None = None
+    try:
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, output)
+        temporary_path = None
+    except OSError as exc:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_exc:
+                raise GitError(
+                    f"cannot safely write output {output}: {exc}; "
+                    f"could not remove temporary file {temporary_path}: {cleanup_exc}"
+                ) from exc
+        raise GitError(f"cannot safely write output {output}: {exc}") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
@@ -192,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 if _GENERATED_MARKER not in existing.splitlines():
                     raise GitError(f"refusing to overwrite existing file {output}; use --force to replace it")
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(content, encoding="utf-8", newline="\n")
+            atomic_write_text(output, content)
             print(f"Wrote {output} (baseline: {base or 'repository root'})")
         return 0
     except (GitError, ValueError) as exc:

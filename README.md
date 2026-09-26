@@ -81,7 +81,7 @@ ignoring tags outside the current history, no-tag fallback, empty ranges,
 deterministic dates, invalid-date handling without a traceback, Markdown
 escaping for untrusted commit metadata, the slash-command skill, and the CLI's
 stdout path, plus retention of unrecognized commit subjects under `Changed`.
-The current local run completes with 13 tests passing.
+The current local run completes with 14 tests passing.
 
 ---
 
