@@ -30,17 +30,17 @@ Run from the repository root:
 
 ```text
 python -m unittest discover -s tests -v
-python -m pytest -q
 python -m compileall -q hooks tests
 ```
 
-On 2026-09-24, Windows unittest discovery ran **35 test methods** (32 passed,
-3 platform-specific tests skipped); pytest reported **32 passed, 3 skipped, and
-61 subtests passed**. `git diff --check` completed without errors. The tests
-use temporary settings and logs and do not modify the user's Claude Code
-configuration. The GitHub Actions run for the published follow-up also passed
-on Windows and Ubuntu, exercising the POSIX permission and symlink checks on
-Ubuntu.
+The standard-library `unittest` command is the runner used by GitHub Actions.
+On 2026-09-26, local Windows runs on Python 3.12, 3.13, and 3.14 each ran
+**35 tests: 35 passed, 0 failed, 0 skipped**. `compileall` and
+`git diff --check` also passed. On commit `9e2c840`, fork GitHub Actions run
+`36135703613` succeeded on Windows 2022 and Ubuntu 24.04. The upstream PR's
+Checks view currently reports zero checks, so the fork run is not represented
+as upstream CI. The tests use temporary settings and logs and do not modify
+the user's Claude Code configuration.
 
 ## Scope and limitation
 
@@ -49,4 +49,7 @@ security sandbox. The README documents syntax that can evade heuristic
 inspection and false-positive risks; ambiguous or over-nested inputs are
 handled conservatively.
 
-No public claim, push, PR, or payment action has been made.
+As of 2026-09-26, PR #4319 remains open on `bounty3-destructive-hook`; `/claim
+#3` has been posted. The PR is not merged, and there is no evidence here of a
+reward adjudication or payment. These facts do not imply that the bounty is
+guaranteed.
