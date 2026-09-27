@@ -48,6 +48,17 @@ class ClaudeTemplateContractTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn(value, self.text)
 
+    def test_authorization_boundary_and_repository_scope_are_explicit(self) -> None:
+        for value in (
+            "Every Server Action, Route Handler, and service entry point resolves the current user and tenant membership before data access.",
+            "Repository methods never trust a client-supplied tenant or resource ID alone",
+            "scope each read and write by the authorized tenant and principal",
+            "Every repository query and mutation must include the authorized tenant/resource scope",
+            "Test that a cross-tenant ID is denied or returns no data and cannot mutate another tenant's records.",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, self.text)
+
     def test_every_rule_bullet_has_an_explicit_reason(self) -> None:
         in_fence = False
         violations = []
