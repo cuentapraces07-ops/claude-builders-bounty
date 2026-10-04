@@ -66,8 +66,12 @@ a clear explanation for Claude and a safer, scoped alternative (for example,
 previewing files before removal, pushing a new branch, or adding a reviewed SQL
 predicate). Invalid hook input is denied and logged with an explicit placeholder
 instead of being silently treated as safe. The automated tests exercise real
-hook subprocesses with representative PreToolUse JSON; a live Claude Code
-session was not available during validation.
+hook subprocesses with representative PreToolUse JSON. An isolated live
+Claude Code session using Claude Pro also verified two actual Bash tool calls:
+a harmless `printf` command ran successfully, and `git push --force --dry-run`
+was denied before execution and logged. That smoke test used no repository or
+remote and changed no global Claude settings; it validates only those two
+cases, not every shell pattern or hosted CI.
 On POSIX systems the log is restricted to owner read/write permissions, and
 the hook refuses to follow a symlink at the log path; other platforms use their
 normal filesystem ACLs.

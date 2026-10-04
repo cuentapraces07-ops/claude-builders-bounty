@@ -303,7 +303,7 @@ def _rm_reason(segment: list[str]) -> str | None:
             has_force = True
         elif token.startswith("-") and not token.startswith("--"):
             flags = token[1:]
-            has_recursive |= "r" in flags
+            has_recursive |= "r" in flags or "R" in flags
             has_force |= "f" in flags
     if has_recursive and has_force:
         return "rm with both recursive and force flags (rm -rf) can erase an entire tree."

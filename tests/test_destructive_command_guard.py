@@ -22,6 +22,35 @@ class GuardDetectionTests(unittest.TestCase):
     def test_blocks_long_rm_flags_in_any_order(self) -> None:
         self.assertIsNotNone(detect_danger("rm --force --recursive ./tmp"))
 
+    def test_blocks_uppercase_recursive_rm_with_force(self) -> None:
+        for command in (
+            "rm -Rf ./fixture",
+            "rm -fR ./fixture",
+            "rm -R -f ./fixture",
+            "rm -f -R ./fixture",
+            "rm -R --force ./fixture",
+            "rm --force -R ./fixture",
+            "rm -rRf ./fixture",
+            "sudo rm -Rf ./fixture",
+            "bash -lc 'rm -Rf ./fixture'",
+            "busybox rm -Rf ./fixture",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNotNone(detect_danger(command))
+
+    def test_uppercase_recursive_rm_preserves_safe_boundaries(self) -> None:
+        for command in (
+            "rm -R ./fixture",
+            "rm -f ./fixture",
+            "rm -- -Rf",
+            "rm -R -- -f",
+            "rm -f -- -R",
+            "echo 'rm -Rf ./fixture'",
+            "printf '%s' 'rm -R --force ./fixture'",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(detect_danger(command))
+
     def test_blocks_force_push(self) -> None:
         self.assertIsNotNone(detect_danger("git -C repo push origin main --force"))
         self.assertIsNotNone(detect_danger("git push --force-with-lease origin main"))
@@ -175,6 +204,52 @@ class GuardDetectionTests(unittest.TestCase):
 
 
 class HookInvocationTests(unittest.TestCase):
+    def test_real_hook_process_handles_uppercase_recursive_rm(self) -> None:
+        hook = Path(__file__).resolve().parents[1] / "hooks" / "destructive_command_guard.py"
+        for command, denied in (
+            ("rm -Rf ./fixture", True),
+            ("rm -fR ./fixture", True),
+            ("rm -R --force ./fixture", True),
+            ("rm -R ./fixture", False),
+            ("rm -R -- -f", False),
+            ("echo 'rm -Rf ./fixture'", False),
+        ):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                environment = os.environ.copy()
+                log_path = Path(directory) / "blocked.log"
+                environment["CLAUDE_HOOK_LOG"] = str(log_path)
+                payload = {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                    "cwd": directory,
+                }
+                # The shell command is JSON data only, never executed.
+                result = subprocess.run(
+                    [sys.executable, str(hook)],
+                    input=json.dumps(payload),
+                    capture_output=True,
+                    check=False,
+                    env=environment,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                if denied:
+                    self.assertNotEqual(result.stdout, "", "dangerous command was allowed")
+                    decision = json.loads(result.stdout)["hookSpecificOutput"]
+                    self.assertEqual(decision["hookEventName"], "PreToolUse")
+                    self.assertEqual(decision["permissionDecision"], "deny")
+                    self.assertIn("recursive and force", decision["permissionDecisionReason"])
+                    records = log_path.read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(len(records), 1)
+                    record = json.loads(records[0])
+                    self.assertEqual(record["attempted_command"], command)
+                    self.assertEqual(record["project_path"], directory)
+                else:
+                    self.assertEqual(result.stdout, "")
+                    self.assertFalse(log_path.exists())
+
     def test_denies_and_logs_blocked_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
