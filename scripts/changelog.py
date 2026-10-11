@@ -109,13 +109,22 @@ def classify(subject: str) -> tuple[str, str]:
     match = _CONVENTIONAL.match(subject.strip())
     kind = match.group("kind").lower() if match else ""
     readable = match.group("body").strip() if match else subject.strip()
-    text = f"{kind} {readable}".lower()
 
-    if kind in {"feat", "add", "added", "create", "new"} or re.search(r"\b(add|added|create|new|introduc)", text):
+    # A recognized type is authoritative, even when its description mentions
+    # another category (for example, "fix: add missing fallback").
+    if kind in {"feat", "add", "added", "create", "new"}:
         return "Added", readable
-    if kind in {"fix", "fixed", "bug", "patch", "repair"} or re.search(r"\b(fix|fixed|bug|patch|repair|correct)", text):
+    if kind in {"fix", "fixed", "bug", "patch", "repair"}:
         return "Fixed", readable
-    if kind in {"remove", "removed", "delete", "deprecate"} or re.search(r"\b(remove|removed|delete|deprecat)", text):
+    if kind in {"remove", "removed", "delete", "deprecate"}:
+        return "Removed", readable
+
+    text = f"{kind} {readable}".lower()
+    if re.search(r"\b(add|added|create|new|introduc)", text):
+        return "Added", readable
+    if re.search(r"\b(fix|fixed|bug|patch|repair|correct)", text):
+        return "Fixed", readable
+    if re.search(r"\b(remove|removed|delete|deprecat)", text):
         return "Removed", readable
     return "Changed", readable
 

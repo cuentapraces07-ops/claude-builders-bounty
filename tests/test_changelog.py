@@ -33,6 +33,83 @@ class ChangelogTests(unittest.TestCase):
     def test_unrecognized_commit_subject_is_kept_under_changed(self) -> None:
         self.assertEqual(classify("Initial commit"), ("Changed", "Initial commit"))
 
+    def test_recognized_types_take_priority_over_description_keywords(self) -> None:
+        cases = (
+            ("feat: repair optional preview", "Added", "repair optional preview"),
+            ("add(cli): remove obsolete export", "Added", "remove obsolete export"),
+            ("added!: fix preview", "Added", "fix preview"),
+            ("create: delete placeholder", "Added", "delete placeholder"),
+            ("new: correct preview", "Added", "correct preview"),
+            ("fix: add missing fallback", "Fixed", "add missing fallback"),
+            ("fix(parser)!: introduce correct fallback", "Fixed", "introduce correct fallback"),
+            ("fixed: new fallback", "Fixed", "new fallback"),
+            ("bug: create fallback", "Fixed", "create fallback"),
+            ("patch: added fallback", "Fixed", "added fallback"),
+            ("repair: remove broken preview", "Fixed", "remove broken preview"),
+            ("remove: added legacy shortcut", "Removed", "added legacy shortcut"),
+            ("removed: new legacy shortcut", "Removed", "new legacy shortcut"),
+            ("delete(cli): fix outdated command", "Removed", "fix outdated command"),
+            ("deprecate!: repair outdated command", "Removed", "repair outdated command"),
+            ("  FIX(Parser)!:  add missing fallback  ", "Fixed", "add missing fallback"),
+            ("REMOVE(api)!: create legacy shortcut", "Removed", "create legacy shortcut"),
+        )
+        for subject, section, readable in cases:
+            with self.subTest(subject=subject):
+                self.assertEqual(classify(subject), (section, readable))
+
+    def test_keyword_fallback_is_preserved_for_unrecognized_types_and_plain_subjects(self) -> None:
+        cases = (
+            ("custom: add preview", "Added", "add preview"),
+            ("custom: repair preview", "Fixed", "repair preview"),
+            ("custom: delete preview", "Removed", "delete preview"),
+            ("custom: update preview", "Changed", "update preview"),
+            ("add preview", "Added", "add preview"),
+            ("repair preview", "Fixed", "repair preview"),
+            ("delete preview", "Removed", "delete preview"),
+            ("update preview", "Changed", "update preview"),
+        )
+        for subject, section, readable in cases:
+            with self.subTest(subject=subject):
+                self.assertEqual(classify(subject), (section, readable))
+
+    def test_markdown_places_ambiguous_conventional_commits_in_their_declared_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            run = lambda *args: subprocess.run(
+                ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+            )
+            run("init", "-q")
+            run("config", "user.name", "Test Author")
+            run("config", "user.email", "test@example.invalid")
+            run("commit", "--allow-empty", "-qm", "chore: initial baseline")
+            run("tag", "v1.0.0")
+            for subject in (
+                "feat: repair optional preview",
+                "fix: add missing fallback",
+                "fix(parser)!: introduce correct fallback",
+                "remove: added legacy shortcut",
+                "delete(cli): fix outdated command",
+                "docs: update examples",
+            ):
+                run("commit", "--allow-empty", "-qm", subject)
+
+            output = markdown(repo, commits_since(repo, "v1.0.0"), "v1.0.0", "2026-10-10")
+
+        sections = {}
+        for block in output.split("### ")[1:]:
+            heading, _, body = block.partition("\n")
+            sections[heading] = [
+                line[2:].split(" ([`", 1)[0]
+                for line in body.splitlines()
+                if line.startswith("- ")
+            ]
+        self.assertEqual(sections, {
+            "Added": ["repair optional preview"],
+            "Fixed": ["add missing fallback", "introduce correct fallback"],
+            "Changed": ["update examples"],
+            "Removed": ["added legacy shortcut", "fix outdated command"],
+        })
+
     def test_reads_commits_since_last_tag_from_a_real_git_repo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
